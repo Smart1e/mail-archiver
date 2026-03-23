@@ -158,23 +158,6 @@
                         <span asp-validation-for="MinEmailAgeDays" class="text-danger"></span>
                     </div>
 
-                    <h4 class="mt-4">@Localizer["ImapServerAccess"]</h4>
-                    <div class="mb-3">
-                        <label asp-for="ImapPassword" class="form-label">@Localizer["ImapServerPassword"]</label>
-                        <input asp-for="ImapPassword" class="form-control" type="password" placeholder="@Localizer["LeaveEmptyToDisableImapAccess"]" autocomplete="new-password" />
-                        <div class="form-text">@Localizer["ImapServerPasswordText"]</div>
-                        <span asp-validation-for="ImapPassword" class="text-danger"></span>
-                    </div>
-                    @if (Model.Id > 0)
-                    {
-                        <div class="alert alert-info">
-                            <strong>@Localizer["ImapServerConnectionDetails"]</strong><br />
-                            @Localizer["ImapServerHost"]: <code>@Context.Request.Host.Host</code><br />
-                            @Localizer["ImapServerPortLabel"]: <code>@(ViewBag.ImapServerPort ?? 143)</code><br />
-                            @Localizer["ImapServerUsernameLabel"]: <code>@Model.EmailAddress</code>
-                        </div>
-                    }
-
                     <h4 class="mt-4">@Localizer["EmailDeletion"]</h4>
                     <div class="mb-3">
                         <label asp-for="DeleteAfterDays" class="form-label">@Localizer["DeleteAfterDays"]</label>
@@ -188,6 +171,24 @@
                         <div class="form-text">@Localizer["LocalRetentionInfo"]</div>
                         <span asp-validation-for="LocalRetentionDays" class="text-danger"></span>
                     </div>
+                </div>
+                <div>
+                    <h4 class="mt-4">@Localizer["ImapServerAccess"]</h4>
+                    <div class="mb-3">
+                        <label asp-for="ImapPassword" class="form-label">@Localizer["ImapServerPassword"]</label>
+                        <input asp-for="ImapPassword" class="form-control" type="password" placeholder="@(ViewBag.HasImapPassword == true ? Localizer["LeaveEmptyToKeepCurrentValue"] : Localizer["LeaveEmptyToDisableImapAccess"])" autocomplete="new-password" />
+                        <div class="form-text">@Localizer["ImapServerPasswordText"]</div>
+                        <span asp-validation-for="ImapPassword" class="text-danger"></span>
+                    </div>
+                    @if (Model.Id > 0)
+                    {
+                        <div class="alert alert-info">
+                            <strong>@Localizer["ImapServerConnectionDetails"]</strong><br />
+                            @Localizer["ImapServerHost"]: <code>@Context.Request.Host.Host</code><br />
+                            @Localizer["ImapServerPortLabel"]: <code>@(ViewBag.ImapServerPort ?? 143)</code><br />
+                            @Localizer["ImapServerUsernameLabel"]: <code>@Model.EmailAddress</code>
+                        </div>
+                    }
                 </div>
                 <div class="mt-4">
                     <button type="submit" class="btn btn-primary">@Localizer["Save"]</button>

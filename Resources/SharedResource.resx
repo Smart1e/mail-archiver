@@ -2225,6 +2225,9 @@
   <data name="LeaveEmptyToDisableImapAccess" xml:space="preserve">
     <value>Leave empty to disable IMAP access for this account</value>
   </data>
+  <data name="LeaveEmptyToKeepCurrentValue" xml:space="preserve">
+    <value>Leave empty to keep current password</value>
+  </data>
   <data name="ImapServerPasswordText" xml:space="preserve">
     <value>Set a password to allow mail clients to access this account's archive via IMAP. Leave empty to disable.</value>
   </data>

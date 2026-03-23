@@ -353,6 +353,7 @@ var model = new MailAccountViewModel
             // Set ViewBag properties
             ViewBag.Provider = account.Provider;
             ViewBag.ImapServerPort = _configuration.GetValue<int?>("ImapServer:Port") ?? 143;
+            ViewBag.HasImapPassword = !string.IsNullOrEmpty(account.ImapPassword);
 
             // Note: Folders are now loaded on-demand via AJAX to improve page load performance
             // The GetFolders endpoint handles folder loading when the user clicks the "Load Folders" button
