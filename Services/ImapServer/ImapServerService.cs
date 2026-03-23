@@ -2,6 +2,7 @@ using MailArchiver.Models;
 using Microsoft.Extensions.Options;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 
 namespace MailArchiver.Services.ImapServer
 {
@@ -33,6 +34,43 @@ namespace MailArchiver.Services.ImapServer
                 return;
             }
 
+            var startTlsEnabled = _options.EnableStartTls;
+            X509Certificate2? tlsCertificate = null;
+
+            if (startTlsEnabled)
+            {
+                if (string.IsNullOrWhiteSpace(_options.TlsCertificatePath))
+                {
+                    _logger.LogWarning("ImapServer:EnableStartTls is true but ImapServer:TlsCertificatePath is empty. STARTTLS will be disabled.");
+                    startTlsEnabled = false;
+                }
+                else
+                {
+                    try
+                    {
+                        var certPath = _options.TlsCertificatePath;
+
+                        if (!File.Exists(certPath))
+                        {
+                            _logger.LogWarning("ImapServer TLS certificate file was not found at '{CertPath}'. STARTTLS will be disabled.", certPath);
+                            startTlsEnabled = false;
+                        }
+                        else
+                        {
+                            tlsCertificate = new X509Certificate2(
+                                certPath,
+                                _options.TlsCertificatePassword,
+                                X509KeyStorageFlags.EphemeralKeySet);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to load ImapServer TLS certificate. STARTTLS will be disabled.");
+                        startTlsEnabled = false;
+                    }
+                }
+            }
+
             if (!IPAddress.TryParse(_options.Host, out var bindAddress))
             {
                 _logger.LogError("Invalid ImapServer:Host value '{Host}'. Using 0.0.0.0.", _options.Host);
@@ -44,7 +82,12 @@ namespace MailArchiver.Services.ImapServer
             try
             {
                 listener.Start();
-                _logger.LogInformation("Built-in IMAP server started on {Host}:{Port}", _options.Host, _options.Port);
+                _logger.LogInformation(
+                    "Built-in IMAP server started on {Host}:{Port}. STARTTLS: {StartTlsEnabled}, Require STARTTLS before auth: {RequireStartTls}",
+                    _options.Host,
+                    _options.Port,
+                    startTlsEnabled,
+                    startTlsEnabled && _options.RequireStartTls);
 
                 while (!stoppingToken.IsCancellationRequested)
                 {
@@ -66,7 +109,13 @@ namespace MailArchiver.Services.ImapServer
                     // Fire-and-forget: handle each client in its own task
                     _ = Task.Run(async () =>
                     {
-                        var session = new ImapSession(client, _scopeFactory, _logger);
+                        var session = new ImapSession(
+                            client,
+                            _scopeFactory,
+                            _logger,
+                            startTlsEnabled,
+                            tlsCertificate,
+                            _options.RequireStartTls);
                         try
                         {
                             await session.HandleAsync(stoppingToken);

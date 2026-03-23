@@ -1,7 +1,10 @@
 using MailArchiver.Data;
 using MailArchiver.Models;
 using Microsoft.EntityFrameworkCore;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
 namespace MailArchiver.Services.ImapServer
@@ -13,21 +16,35 @@ namespace MailArchiver.Services.ImapServer
     public class ImapSession
     {
         private enum SessionState { NotAuthenticated, Authenticated, Selected, Logout }
+        private enum CommandResult { Continue, UpgradeToTlsRequested }
 
         private readonly TcpClient _client;
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger _logger;
+        private readonly bool _startTlsEnabled;
+        private readonly X509Certificate2? _tlsCertificate;
+        private readonly bool _requireStartTls;
 
         private SessionState _state = SessionState.NotAuthenticated;
+        private bool _isTls;
         private MailAccount? _account;
         private string? _selectedFolder;
         private List<ArchivedEmail> _folderMessages = new();
 
-        public ImapSession(TcpClient client, IServiceScopeFactory scopeFactory, ILogger logger)
+        public ImapSession(
+            TcpClient client,
+            IServiceScopeFactory scopeFactory,
+            ILogger logger,
+            bool startTlsEnabled,
+            X509Certificate2? tlsCertificate,
+            bool requireStartTls)
         {
             _client = client;
             _scopeFactory = scopeFactory;
             _logger = logger;
+            _startTlsEnabled = startTlsEnabled;
+            _tlsCertificate = tlsCertificate;
+            _requireStartTls = requireStartTls;
         }
 
         public async Task HandleAsync(CancellationToken ct)
@@ -35,20 +52,15 @@ namespace MailArchiver.Services.ImapServer
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MailArchiverDbContext>();
 
-            using var stream = _client.GetStream();
-            using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true)
-            {
-                NewLine = "\r\n",
-                AutoFlush = false
-            };
+            Stream stream = _client.GetStream();
+            var (reader, writer) = CreateTextAdapters(stream);
 
             var remote = _client.Client.RemoteEndPoint?.ToString() ?? "unknown";
             _logger.LogInformation("IMAP client connected from {Remote}", remote);
 
             try
             {
-                await writer.WriteLineAsync("* OK [CAPABILITY IMAP4rev1 LITERAL+ AUTH=PLAIN AUTH=LOGIN] MailArchiver IMAP4rev1 Server Ready");
+                await writer.WriteLineAsync($"* OK [CAPABILITY {BuildCapability()}] MailArchiver IMAP4rev1 Server Ready");
                 await writer.FlushAsync(ct);
 
                 while (!ct.IsCancellationRequested && _state != SessionState.Logout)
@@ -58,8 +70,49 @@ namespace MailArchiver.Services.ImapServer
 
                     _logger.LogDebug("IMAP << {Line}", line);
 
-                    await ProcessCommandAsync(line, reader, writer, db, ct);
+                    var result = await ProcessCommandAsync(line, reader, writer, db, ct);
                     await writer.FlushAsync(ct);
+
+                    if (result == CommandResult.UpgradeToTlsRequested)
+                    {
+                        if (_tlsCertificate == null)
+                        {
+                            _logger.LogWarning("STARTTLS was requested but no TLS certificate is available.");
+                            break;
+                        }
+
+                        var sslStream = new SslStream(stream, leaveInnerStream: false);
+
+                        try
+                        {
+                            await sslStream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                            {
+                                ServerCertificate = _tlsCertificate,
+                                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                                ClientCertificateRequired = false,
+                                CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+                            }, ct);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to negotiate STARTTLS for client {Remote}", remote);
+                            break;
+                        }
+
+                        // Reinitialize text adapters after the protocol switch.
+                        reader.Dispose();
+                        writer.Dispose();
+                        stream = sslStream;
+                        (reader, writer) = CreateTextAdapters(stream);
+
+                        _isTls = true;
+                        _state = SessionState.NotAuthenticated;
+                        _account = null;
+                        _selectedFolder = null;
+                        _folderMessages.Clear();
+
+                        _logger.LogInformation("STARTTLS negotiated successfully for client {Remote}", remote);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -70,16 +123,53 @@ namespace MailArchiver.Services.ImapServer
             }
             finally
             {
+                reader.Dispose();
+                writer.Dispose();
+                stream.Dispose();
                 _client.Close();
                 _logger.LogInformation("IMAP client disconnected from {Remote}", remote);
             }
+        }
+
+        private static (StreamReader Reader, StreamWriter Writer) CreateTextAdapters(Stream stream)
+        {
+            var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+            var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true)
+            {
+                NewLine = "\r\n",
+                AutoFlush = false
+            };
+
+            return (reader, writer);
+        }
+
+        private string BuildCapability()
+        {
+            var capabilities = new List<string> { "IMAP4rev1", "LITERAL+" };
+
+            if (_startTlsEnabled && !_isTls)
+            {
+                capabilities.Add("STARTTLS");
+            }
+
+            if (_requireStartTls && !_isTls)
+            {
+                capabilities.Add("LOGINDISABLED");
+            }
+            else
+            {
+                capabilities.Add("AUTH=PLAIN");
+                capabilities.Add("AUTH=LOGIN");
+            }
+
+            return string.Join(" ", capabilities);
         }
 
         // -----------------------------------------------------------------------
         // Command dispatch
         // -----------------------------------------------------------------------
 
-        private async Task ProcessCommandAsync(string line, StreamReader reader, StreamWriter writer,
+        private async Task<CommandResult> ProcessCommandAsync(string line, StreamReader reader, StreamWriter writer,
             MailArchiverDbContext db, CancellationToken ct)
         {
             // Parse: TAG SP COMMAND [SP ARGS]
@@ -87,7 +177,7 @@ namespace MailArchiver.Services.ImapServer
             if (parts.Length < 2)
             {
                 await writer.WriteLineAsync("* BAD Invalid command");
-                return;
+                return CommandResult.Continue;
             }
 
             var tag = parts[0];
@@ -99,9 +189,31 @@ namespace MailArchiver.Services.ImapServer
             switch (command)
             {
                 case "CAPABILITY":
-                    await writer.WriteLineAsync("* CAPABILITY IMAP4rev1 LITERAL+ AUTH=PLAIN AUTH=LOGIN");
+                    await writer.WriteLineAsync($"* CAPABILITY {BuildCapability()}");
                     await writer.WriteLineAsync($"{tag} OK CAPABILITY completed");
                     break;
+
+                case "STARTTLS":
+                    if (!_startTlsEnabled || _tlsCertificate == null)
+                    {
+                        await writer.WriteLineAsync($"{tag} NO STARTTLS not available");
+                        break;
+                    }
+
+                    if (_isTls)
+                    {
+                        await writer.WriteLineAsync($"{tag} BAD Already using TLS");
+                        break;
+                    }
+
+                    if (_state != SessionState.NotAuthenticated)
+                    {
+                        await writer.WriteLineAsync($"{tag} BAD STARTTLS only valid in not-authenticated state");
+                        break;
+                    }
+
+                    await writer.WriteLineAsync($"{tag} OK Begin TLS negotiation now");
+                    return CommandResult.UpgradeToTlsRequested;
 
                 case "NOOP":
                     await writer.WriteLineAsync($"{tag} OK NOOP completed");
@@ -114,10 +226,20 @@ namespace MailArchiver.Services.ImapServer
                     break;
 
                 case "LOGIN":
+                    if (_requireStartTls && !_isTls)
+                    {
+                        await writer.WriteLineAsync($"{tag} NO [PRIVACYREQUIRED] STARTTLS is required before authentication");
+                        break;
+                    }
                     await HandleLoginAsync(tag, args, writer, db, ct);
                     break;
 
                 case "AUTHENTICATE":
+                    if (_requireStartTls && !_isTls)
+                    {
+                        await writer.WriteLineAsync($"{tag} NO [PRIVACYREQUIRED] STARTTLS is required before authentication");
+                        break;
+                    }
                     await HandleAuthenticateAsync(tag, args, writer, reader, db, ct);
                     break;
 
@@ -174,6 +296,8 @@ namespace MailArchiver.Services.ImapServer
                     await writer.WriteLineAsync($"{tag} BAD Unknown command {command}");
                     break;
             }
+
+            return CommandResult.Continue;
         }
 
         // -----------------------------------------------------------------------

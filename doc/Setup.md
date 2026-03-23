@@ -76,6 +76,15 @@ services:
       - DatabaseMaintenance__DailyExecutionTime=02:00
       - DatabaseMaintenance__TimeoutMinutes=30
 
+      # Built-in IMAP Server Settings (Optional)
+      - ImapServer__Enabled=false
+      - ImapServer__Host=0.0.0.0
+      - ImapServer__Port=143
+      - ImapServer__EnableStartTls=false
+      - ImapServer__RequireStartTls=false
+      - ImapServer__TlsCertificatePath=/certs/imap-server.pfx
+      - ImapServer__TlsCertificatePassword=change-me
+
       # Logging Settings (Optional - defaults to Information level)
       - Logging__LogLevel__Default=Information
       - Logging__LogLevel__Microsoft_AspNetCore=Warning
@@ -235,6 +244,35 @@ docker compose restart
 - `DatabaseMaintenance__Enabled`: Enable or disable automatic daily database maintenance (true/false). Default is `false`. When enabled, the system will automatically run VACUUM ANALYZE operations to optimize database performance and prevent bloat. See [Database Maintenance Guide](DatabaseMaintenance.md) for more details.
 - `DatabaseMaintenance__DailyExecutionTime`: The time of day when database maintenance should run, in 24-hour format (HH:mm). Default is `02:00`. Choose a time during low system activity.
 - `DatabaseMaintenance__TimeoutMinutes`: Maximum time allowed for maintenance operations in minutes. Default is `30`. Increase this value for larger databases.
+
+### 📬 Built-in IMAP Server Settings
+- `ImapServer__Enabled`: Enable or disable the built-in read-only IMAP server (true/false). Default is `false`.
+- `ImapServer__Host`: Bind address for the built-in IMAP server. Default is `0.0.0.0`.
+- `ImapServer__Port`: TCP port for the built-in IMAP server. Default is `143`.
+- `ImapServer__EnableStartTls`: Advertise and support IMAP STARTTLS for encrypted client connections (true/false). Default is `false`.
+- `ImapServer__RequireStartTls`: Require STARTTLS before allowing `LOGIN` or `AUTHENTICATE` (true/false). Default is `false`.
+- `ImapServer__TlsCertificatePath`: Path to the IMAP server certificate in PFX format inside the container (required when `ImapServer__EnableStartTls=true`).
+- `ImapServer__TlsCertificatePassword`: Password for the IMAP PFX certificate.
+
+#### Example: IMAP with STARTTLS enabled
+
+```yaml
+environment:
+  - ImapServer__Enabled=true
+  - ImapServer__Host=0.0.0.0
+  - ImapServer__Port=143
+  - ImapServer__EnableStartTls=true
+  - ImapServer__RequireStartTls=true
+  - ImapServer__TlsCertificatePath=/certs/imap-server.pfx
+  - ImapServer__TlsCertificatePassword=your-strong-pfx-password
+```
+
+To use the certificate path above, mount your certificate directory, for example:
+
+```yaml
+volumes:
+  - ./certs:/certs:ro
+```
 
 ### Logging Settings
 - `Logging__LogLevel__Default`: The default log level for the application. Available levels are: `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, `None`. Default is `Information`.
