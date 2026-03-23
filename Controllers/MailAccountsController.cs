@@ -32,6 +32,7 @@ namespace MailArchiver.Controllers
     private readonly IExportService _exportService;
     private readonly IAccessLogService _accessLogService;
     private readonly IMailAccountDeletionService _mailAccountDeletionService;
+    private readonly IConfiguration _configuration;
 
     public MailAccountsController(
         MailArchiverDbContext context,
@@ -48,7 +49,8 @@ namespace MailArchiver.Controllers
         IServiceScopeFactory serviceScopeFactory,
         IExportService exportService,
         IAccessLogService accessLogService,
-        IMailAccountDeletionService mailAccountDeletionService)
+        IMailAccountDeletionService mailAccountDeletionService,
+        IConfiguration configuration)
     {
         _context = context;
         _emailCoreService = emailCoreService;
@@ -65,6 +67,7 @@ namespace MailArchiver.Controllers
         _exportService = exportService;
         _accessLogService = accessLogService;
         _mailAccountDeletionService = mailAccountDeletionService;
+        _configuration = configuration;
     }
 
         private async Task<bool> HasAccessToAccountAsync(int accountId)
@@ -349,7 +352,8 @@ var model = new MailAccountViewModel
 
             // Set ViewBag properties
             ViewBag.Provider = account.Provider;
-            
+            ViewBag.ImapServerPort = _configuration.GetValue<int?>("ImapServer:Port") ?? 143;
+
             // Note: Folders are now loaded on-demand via AJAX to improve page load performance
             // The GetFolders endpoint handles folder loading when the user clicks the "Load Folders" button
 
