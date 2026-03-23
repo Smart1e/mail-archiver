@@ -60,5 +60,9 @@ namespace MailArchiver.Models.ViewModels
         [Display(Name = "Local Retention Days")]
         [Range(1, int.MaxValue, ErrorMessage = "Local retention days must be at least 1")]
         public int? LocalRetentionDays { get; set; }
+
+        [Display(Name = "Minimum Email Age (Days)")]
+        [Range(1, int.MaxValue, ErrorMessage = "Minimum email age must be at least 1")]
+        public int? MinEmailAgeDays { get; set; }
     }
 }

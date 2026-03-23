@@ -225,6 +225,7 @@ var model = new MailAccountViewModel
                     ExcludedFolders = string.Empty,
                     DeleteAfterDays = model.DeleteAfterDays,
                     LocalRetentionDays = model.LocalRetentionDays,
+                    MinEmailAgeDays = model.MinEmailAgeDays,
                     LastSync = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)
                 };
 

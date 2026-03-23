@@ -125,6 +125,14 @@
                         <span asp-validation-for="LocalRetentionDays" class="text-danger"></span>
                     </div>
                 </div>
+
+                <h4 class="mt-4">@Localizer["SyncSettings"]</h4>
+                <div class="mb-3">
+                    <label asp-for="MinEmailAgeDays" class="form-label">@Localizer["MinEmailAgeDays"]</label>
+                    <input asp-for="MinEmailAgeDays" class="form-control" type="number" min="1" placeholder="@Localizer["LeaveEmptyToArchiveAllEmails"]" />
+                    <div class="form-text">@Localizer["MinEmailAgeDaysText"]</div>
+                    <span asp-validation-for="MinEmailAgeDays" class="text-danger"></span>
+                </div>
                 
                 <div class="mt-4">
                     <button type="submit" class="btn btn-primary">@Localizer["Save"]</button>
