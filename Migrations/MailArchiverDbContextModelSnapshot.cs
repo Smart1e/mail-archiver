@@ -63,6 +63,12 @@ namespace MailArchiver.Migrations
                     b.Property<int?>("LocalRetentionDays")
                         .HasColumnType("integer");
 
+                    b.Property<int?>("MinEmailAgeDays")
+                        .HasColumnType("integer");
+
+                    b.Property<string?>("ImapPassword")
+                        .HasColumnType("text");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");

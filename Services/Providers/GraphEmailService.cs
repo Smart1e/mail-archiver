@@ -427,7 +427,16 @@ private async Task<GraphServiceClient> CreateGraphClientAsync(MailAccount accoun
                 {
                     // First attempt: Simple filter without orderby
                     var filter = $"lastModifiedDateTime ge {lastSync:yyyy-MM-ddTHH:mm:ssZ}";
-                    _logger.LogInformation("Attempting Graph API query with filter for folder {FolderName}: {Filter}", 
+
+                    // Apply minimum age filter: only archive emails older than MinEmailAgeDays
+                    if (account.MinEmailAgeDays.HasValue && account.MinEmailAgeDays.Value > 0)
+                    {
+                        var maxAgeDate = DateTime.UtcNow.AddDays(-account.MinEmailAgeDays.Value);
+                        filter += $" and sentDateTime le {maxAgeDate:yyyy-MM-ddTHH:mm:ssZ}";
+                        _logger.LogInformation("Applying min age filter to Graph API query: sentDateTime le {CutoffDate:u}", maxAgeDate);
+                    }
+
+                    _logger.LogInformation("Attempting Graph API query with filter for folder {FolderName}: {Filter}",
                         folder.DisplayName, filter);
                     
                     messagesResponse = await graphClient.Users[account.EmailAddress].MailFolders[folder.Id].Messages.GetAsync((requestConfiguration) =>

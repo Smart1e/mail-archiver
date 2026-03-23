@@ -338,6 +338,8 @@ var model = new MailAccountViewModel
                 ExcludedFolders = account.ExcludedFolders,
                 DeleteAfterDays = account.DeleteAfterDays,
                 LocalRetentionDays = account.LocalRetentionDays,
+                MinEmailAgeDays = account.MinEmailAgeDays,
+                // Note: ImapPassword intentionally not round-tripped to UI (like Password)
                 Provider = account.Provider,
                 ClientId = account.ClientId,
                 ClientSecret = account.ClientSecret,
@@ -462,6 +464,13 @@ var model = new MailAccountViewModel
                     account.ExcludedFolders = model.ExcludedFolders ?? string.Empty;
                     account.DeleteAfterDays = model.DeleteAfterDays;
                     account.LocalRetentionDays = model.LocalRetentionDays;
+                    account.MinEmailAgeDays = model.MinEmailAgeDays;
+
+                    // Only update ImapPassword if a new one was provided
+                    if (!string.IsNullOrEmpty(model.ImapPassword))
+                    {
+                        account.ImapPassword = model.ImapPassword;
+                    }
 
                     // Validate local retention policy
                     if (account.LocalRetentionDays.HasValue && !account.DeleteAfterDays.HasValue)

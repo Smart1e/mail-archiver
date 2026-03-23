@@ -23,7 +23,13 @@ public class MailAccount
     
     // Local archive retention functionality
     public int? LocalRetentionDays { get; set; }
-    
+
+    // Minimum age for emails to be archived (null = archive all)
+    public int? MinEmailAgeDays { get; set; }
+
+    // Password for built-in IMAP server access (null = IMAP access disabled for this account)
+    public string? ImapPassword { get; set; }
+
     // Provider field for account type
     public ProviderType Provider { get; set; } = ProviderType.IMAP;
     

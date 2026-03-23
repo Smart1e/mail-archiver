@@ -150,6 +150,31 @@
                         </div>
                     }
                     
+                    <h4 class="mt-4">@Localizer["SyncSettings"]</h4>
+                    <div class="mb-3">
+                        <label asp-for="MinEmailAgeDays" class="form-label">@Localizer["MinEmailAgeDays"]</label>
+                        <input asp-for="MinEmailAgeDays" class="form-control" type="number" min="1" placeholder="@Localizer["LeaveEmptyToArchiveAllEmails"]" />
+                        <div class="form-text">@Localizer["MinEmailAgeDaysText"]</div>
+                        <span asp-validation-for="MinEmailAgeDays" class="text-danger"></span>
+                    </div>
+
+                    <h4 class="mt-4">@Localizer["ImapServerAccess"]</h4>
+                    <div class="mb-3">
+                        <label asp-for="ImapPassword" class="form-label">@Localizer["ImapServerPassword"]</label>
+                        <input asp-for="ImapPassword" class="form-control" type="password" placeholder="@Localizer["LeaveEmptyToDisableImapAccess"]" autocomplete="new-password" />
+                        <div class="form-text">@Localizer["ImapServerPasswordText"]</div>
+                        <span asp-validation-for="ImapPassword" class="text-danger"></span>
+                    </div>
+                    @if (Model.Id > 0)
+                    {
+                        <div class="alert alert-info">
+                            <strong>@Localizer["ImapServerConnectionDetails"]</strong><br />
+                            @Localizer["ImapServerHost"]: <code>@Context.Request.Host.Host</code><br />
+                            @Localizer["ImapServerPortLabel"]: <code>143</code><br />
+                            @Localizer["ImapServerUsernameLabel"]: <code>@Model.EmailAddress</code>
+                        </div>
+                    }
+
                     <h4 class="mt-4">@Localizer["EmailDeletion"]</h4>
                     <div class="mb-3">
                         <label asp-for="DeleteAfterDays" class="form-label">@Localizer["DeleteAfterDays"]</label>

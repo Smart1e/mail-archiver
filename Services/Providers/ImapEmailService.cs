@@ -890,6 +890,19 @@ namespace MailArchiver.Services.Providers
 
                 var query = SearchQuery.DeliveredAfter(lastSync);
 
+                // Apply minimum age filter: only archive emails older than MinEmailAgeDays
+                DateTime? minAgeMaxDate = null;
+                if (account.MinEmailAgeDays.HasValue && account.MinEmailAgeDays.Value > 0)
+                {
+                    minAgeMaxDate = DateTime.UtcNow.AddDays(-account.MinEmailAgeDays.Value);
+                    query = SearchQuery.And(query, SearchQuery.DeliveredBefore(minAgeMaxDate.Value));
+                    _logger.LogInformation("Applying min age filter: only archiving emails older than {Days} days (before {CutoffDate:u})",
+                        account.MinEmailAgeDays.Value, minAgeMaxDate.Value);
+                }
+
+                // Track whether a fallback path bypassed the server-side age filter
+                bool needsClientSideAgeFilter = false;
+
                 try
                 {
                     // Ensure connection is still active before searching
@@ -925,6 +938,7 @@ namespace MailArchiver.Services.Providers
                             _logger.LogWarning("DeliveredAfter returned 0 results but folder contains {Count} messages during full sync for {FolderName}. Server may not support DeliveredAfter. Using SearchQuery.All instead.",
                                 folder.Count, folder.FullName);
                             uids = await folder.SearchAsync(SearchQuery.All);
+                            needsClientSideAgeFilter = minAgeMaxDate.HasValue;
                             _logger.LogInformation("SearchQuery.All found {Count} messages in folder {FolderName}",
                                 uids.Count, folder.FullName);
                         }
@@ -944,7 +958,8 @@ namespace MailArchiver.Services.Providers
                             // Fetch all UIDs using sequence numbers (1:*)
                             var allUids = await folder.FetchAsync(0, -1, MessageSummaryItems.UniqueId);
                             uids = allUids.Select(msg => msg.UniqueId).ToList();
-                            
+                            needsClientSideAgeFilter = minAgeMaxDate.HasValue;
+
                             _logger.LogInformation("Retrieved {Count} UIDs by sequence for folder {FolderName}",
                                 uids.Count, folder.FullName);
                         }
@@ -954,6 +969,8 @@ namespace MailArchiver.Services.Providers
                         // Some servers may not support DeliveredAfter properly
                         _logger.LogWarning(searchEx, "DeliveredAfter search failed for folder {FolderName}, falling back to SentSince",
                             folder.FullName);
+                        // Fallback paths do not include the server-side age filter
+                        needsClientSideAgeFilter = minAgeMaxDate.HasValue;
 
                         try
                         {
@@ -961,19 +978,19 @@ namespace MailArchiver.Services.Providers
                             uids = await folder.SearchAsync(SearchQuery.SentSince(lastSync.Date));
                             _logger.LogDebug("SentSince search found {Count} messages in folder {FolderName}",
                                 uids.Count, folder.FullName);
-                            
+
                             // Check for server search limit on fallback too (only during full sync)
                             if (isFullSync && folder.Count > 0 && uids.Count > 0 && uids.Count < folder.Count)
                             {
                                 double percentageReturned = (double)uids.Count / folder.Count * 100;
-                                
+
                                 _logger.LogWarning("SentSince returned only {ReturnedCount} of {TotalCount} messages ({Percentage:F1}%) for {FolderName}. " +
                                     "Fetching all UIDs by sequence instead.",
                                     uids.Count, folder.Count, percentageReturned, folder.FullName);
-                                
+
                                 var allUids = await folder.FetchAsync(0, -1, MessageSummaryItems.UniqueId);
                                 uids = allUids.Select(msg => msg.UniqueId).ToList();
-                                
+
                                 _logger.LogInformation("Retrieved {Count} UIDs by sequence for folder {FolderName}",
                                     uids.Count, folder.FullName);
                             }
@@ -986,23 +1003,35 @@ namespace MailArchiver.Services.Providers
                             uids = await folder.SearchAsync(SearchQuery.All);
                             _logger.LogInformation("All query found {Count} total messages in folder {FolderName}, will filter by date client-side",
                                 uids.Count, folder.FullName);
-                            
+
                             // Check for server search limit on All query too (only during full sync)
                             if (isFullSync && folder.Count > 0 && uids.Count > 0 && uids.Count < folder.Count)
                             {
                                 double percentageReturned = (double)uids.Count / folder.Count * 100;
-                                
+
                                 _logger.LogWarning("SearchQuery.All returned only {ReturnedCount} of {TotalCount} messages ({Percentage:F1}%) for {FolderName}. " +
                                     "Fetching all UIDs by sequence instead.",
                                     uids.Count, folder.Count, percentageReturned, folder.FullName);
-                                
+
                                 var allUids = await folder.FetchAsync(0, -1, MessageSummaryItems.UniqueId);
                                 uids = allUids.Select(msg => msg.UniqueId).ToList();
-                                
+
                                 _logger.LogInformation("Retrieved {Count} UIDs by sequence for folder {FolderName}",
                                     uids.Count, folder.FullName);
                             }
                         }
+                    }
+
+                    // Apply client-side age filter when fallback paths bypassed server-side filtering
+                    if (needsClientSideAgeFilter && minAgeMaxDate.HasValue)
+                    {
+                        var summaries = await folder.FetchAsync(uids, MessageSummaryItems.Envelope);
+                        uids = summaries
+                            .Where(s => s.Envelope?.Date == null || s.Envelope.Date.Value.UtcDateTime <= minAgeMaxDate.Value)
+                            .Select(s => s.UniqueId)
+                            .ToList();
+                        _logger.LogInformation("After client-side min age filter: {Count} messages remain for folder {FolderName}",
+                            uids.Count, folder.FullName);
                     }
 
                     _logger.LogInformation("Found {Count} messages to process in folder {FolderName} for account: {AccountName}",

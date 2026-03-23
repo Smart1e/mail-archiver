@@ -117,6 +117,10 @@ builder.Services.Configure<BatchOperationOptions>(
 builder.Services.Configure<MailSyncOptions>(
     builder.Configuration.GetSection(MailSyncOptions.MailSync));
 
+// Add IMAP Server Options
+builder.Services.Configure<MailArchiver.Models.ImapServerOptions>(
+    builder.Configuration.GetSection(MailArchiver.Models.ImapServerOptions.ImapServer));
+
 // Add Upload Options
 builder.Services.Configure<UploadOptions>(
     builder.Configuration.GetSection(UploadOptions.Upload));
@@ -331,6 +335,9 @@ builder.Services.AddSingleton<IEmailDeletionService>(provider => provider.GetReq
 builder.Services.AddHostedService<EmailDeletionService>(provider => provider.GetRequiredService<EmailDeletionService>());
 
 builder.Services.AddHostedService<MailSyncBackgroundService>();
+
+// Register built-in IMAP server
+builder.Services.AddHostedService<MailArchiver.Services.ImapServer.ImapServerService>();
 
 // Register DatabaseMaintenanceService as singleton and hosted service - MUST be the same instance
 builder.Services.AddSingleton<DatabaseMaintenanceService>();
