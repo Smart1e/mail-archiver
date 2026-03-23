@@ -117,6 +117,10 @@ namespace MailArchiver.Services.ImapServer
                     await HandleLoginAsync(tag, args, writer, db, ct);
                     break;
 
+                case "AUTHENTICATE":
+                    await HandleAuthenticateAsync(tag, args, writer, reader, db, ct);
+                    break;
+
                 case "LIST":
                     await HandleListAsync(tag, args, writer, db, ct);
                     break;
@@ -202,6 +206,92 @@ namespace MailArchiver.Services.ImapServer
             _state = SessionState.Authenticated;
             _logger.LogInformation("IMAP LOGIN succeeded for {User} (account: {AccountName})", user, account.Name);
             await writer.WriteLineAsync($"{tag} OK LOGIN completed");
+        }
+
+        // -----------------------------------------------------------------------
+        // AUTHENTICATE (PLAIN and LOGIN mechanisms for Apple Mail / Outlook)
+        // -----------------------------------------------------------------------
+
+        private async Task HandleAuthenticateAsync(string tag, string args, StreamWriter writer,
+            StreamReader reader, MailArchiverDbContext db, CancellationToken ct)
+        {
+            var mechanism = args.Trim().Split(' ')[0].ToUpperInvariant();
+            // Inline initial response (e.g. AUTHENTICATE PLAIN <base64>)
+            var inline = args.Trim().Contains(' ') ? args.Trim().Substring(args.Trim().IndexOf(' ') + 1).Trim() : null;
+
+            if (mechanism != "PLAIN" && mechanism != "LOGIN")
+            {
+                await writer.WriteLineAsync($"{tag} NO Unsupported authentication mechanism");
+                return;
+            }
+
+            string user, pass;
+
+            if (mechanism == "PLAIN")
+            {
+                string b64;
+                if (!string.IsNullOrEmpty(inline) && inline != "=")
+                {
+                    b64 = inline;
+                }
+                else
+                {
+                    // Send continuation and wait for base64 blob
+                    await writer.WriteLineAsync("+ ");
+                    await writer.FlushAsync(ct);
+                    b64 = await reader.ReadLineAsync(ct) ?? "";
+                }
+
+                try
+                {
+                    var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+                    // Format: [authzid]\0authcid\0passwd
+                    var parts = decoded.Split('\0');
+                    user = parts.Length >= 3 ? parts[1] : (parts.Length == 2 ? parts[0] : "");
+                    pass = parts.Length >= 3 ? parts[2] : (parts.Length == 2 ? parts[1] : "");
+                }
+                catch
+                {
+                    await writer.WriteLineAsync($"{tag} BAD Invalid base64 encoding");
+                    return;
+                }
+            }
+            else // LOGIN mechanism: server prompts for username then password
+            {
+                await writer.WriteLineAsync("+ " + Convert.ToBase64String(Encoding.UTF8.GetBytes("Username:")));
+                await writer.FlushAsync(ct);
+                var userB64 = await reader.ReadLineAsync(ct) ?? "";
+
+                await writer.WriteLineAsync("+ " + Convert.ToBase64String(Encoding.UTF8.GetBytes("Password:")));
+                await writer.FlushAsync(ct);
+                var passB64 = await reader.ReadLineAsync(ct) ?? "";
+
+                try
+                {
+                    user = Encoding.UTF8.GetString(Convert.FromBase64String(userB64));
+                    pass = Encoding.UTF8.GetString(Convert.FromBase64String(passB64));
+                }
+                catch
+                {
+                    await writer.WriteLineAsync($"{tag} BAD Invalid base64 encoding");
+                    return;
+                }
+            }
+
+            var account = await db.MailAccounts
+                .FirstOrDefaultAsync(a => a.EmailAddress == user && a.ImapPassword != null && a.ImapPassword == pass, ct);
+
+            if (account == null)
+            {
+                _logger.LogWarning("IMAP AUTHENTICATE failed for user {User}", user);
+                await writer.WriteLineAsync($"{tag} NO AUTHENTICATE failed");
+                return;
+            }
+
+            _account = account;
+            _state = SessionState.Authenticated;
+            _logger.LogInformation("IMAP AUTHENTICATE succeeded for {User} (account: {AccountName})", user, account.Name);
+            await writer.WriteLineAsync($"{tag} OK AUTHENTICATE completed");
         }
 
         // -----------------------------------------------------------------------
