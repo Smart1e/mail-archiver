@@ -888,7 +888,7 @@ namespace MailArchiver.Services.Providers
                     lastSync = lastSync.AddHours(-12);
                 }
 
-                var query = SearchQuery.DeliveredAfter(lastSync);
+                SearchQuery query = SearchQuery.DeliveredAfter(lastSync);
 
                 // Apply minimum age filter: only archive emails older than MinEmailAgeDays
                 DateTime? minAgeMaxDate = null;
