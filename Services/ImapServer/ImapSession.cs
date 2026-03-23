@@ -81,7 +81,7 @@ namespace MailArchiver.Services.ImapServer
                             break;
                         }
 
-                        var sslStream = new SslStream(stream, leaveInnerStream: false);
+                        var sslStream = new SslStream(stream, leaveInnerStreamOpen: false);
 
                         try
                         {
