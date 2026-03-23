@@ -48,7 +48,7 @@ namespace MailArchiver.Services.ImapServer
 
             try
             {
-                await writer.WriteLineAsync("* OK MailArchiver IMAP4rev1 Server Ready");
+                await writer.WriteLineAsync("* OK [CAPABILITY IMAP4rev1 LITERAL+ AUTH=PLAIN AUTH=LOGIN] MailArchiver IMAP4rev1 Server Ready");
                 await writer.FlushAsync(ct);
 
                 while (!ct.IsCancellationRequested && _state != SessionState.Logout)
@@ -99,7 +99,7 @@ namespace MailArchiver.Services.ImapServer
             switch (command)
             {
                 case "CAPABILITY":
-                    await writer.WriteLineAsync("* CAPABILITY IMAP4rev1 LITERAL+");
+                    await writer.WriteLineAsync("* CAPABILITY IMAP4rev1 LITERAL+ AUTH=PLAIN AUTH=LOGIN");
                     await writer.WriteLineAsync($"{tag} OK CAPABILITY completed");
                     break;
 
