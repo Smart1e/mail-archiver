@@ -46,8 +46,22 @@ namespace MailArchiver.Services.ImapServer
                 ? Encoding.UTF8.GetString(email.OriginalBodyHtml)
                 : email.HtmlBody;
 
+            // If textBody looks like HTML, don't put it in the plain text part
             if (!string.IsNullOrEmpty(textBody))
-                bodyBuilder.TextBody = textBody;
+            {
+                if (textBody.TrimStart().StartsWith("<", StringComparison.Ordinal) ||
+                    textBody.Contains("<html", StringComparison.OrdinalIgnoreCase) ||
+                    textBody.Contains("<!DOCTYPE", StringComparison.OrdinalIgnoreCase))
+                {
+                    // textBody is actually HTML — use it as htmlBody if we don't already have one
+                    if (string.IsNullOrEmpty(htmlBody))
+                        htmlBody = textBody;
+                }
+                else
+                {
+                    bodyBuilder.TextBody = textBody;
+                }
+            }
             if (!string.IsNullOrEmpty(htmlBody))
                 bodyBuilder.HtmlBody = htmlBody;
 
