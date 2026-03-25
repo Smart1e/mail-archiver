@@ -696,8 +696,61 @@ namespace MailArchiver.Services.ImapServer
                 }
                 else if (upper.StartsWith("BODY[TEXT") || upper.StartsWith("BODY.PEEK[TEXT"))
                 {
-                    literalBytes = Encoding.UTF8.GetBytes(email.Body ?? "");
+                    var msg = ImapMessageBuilder.BuildMessage(email);
+                    var fullBytes = ImapMessageBuilder.SerializeMessage(msg);
+                    var fullStr = Encoding.UTF8.GetString(fullBytes);
+                    // TEXT is everything after the first blank line (header/body separator)
+                    var sepIdx = fullStr.IndexOf("\r\n\r\n");
+                    literalBytes = sepIdx >= 0
+                        ? Encoding.UTF8.GetBytes(fullStr.Substring(sepIdx + 4))
+                        : Encoding.UTF8.GetBytes(fullStr);
                     literalItemName = "BODY[TEXT]";
+                }
+                else if (upper.StartsWith("BODY[") || upper.StartsWith("BODY.PEEK["))
+                {
+                    // Handle BODY[N], BODY[N.N], BODY[N.MIME], BODY.PEEK[N] etc.
+                    // Extract the section spec between [ and ]
+                    var openBracket = upper.IndexOf('[');
+                    var closeBracket = upper.IndexOf(']');
+                    if (openBracket >= 0 && closeBracket > openBracket)
+                    {
+                        var section = upper.Substring(openBracket + 1, closeBracket - openBracket - 1);
+                        var msg = ImapMessageBuilder.BuildMessage(email);
+
+                        if (string.IsNullOrEmpty(section))
+                        {
+                            // BODY[] — full message (already handled above, but just in case)
+                            literalBytes = ImapMessageBuilder.SerializeMessage(msg);
+                            literalItemName = "BODY[]";
+                        }
+                        else
+                        {
+                            // Try to resolve MIME part by section number (e.g. "1", "1.1", "2")
+                            var part = ResolveMimePart(msg.Body, section);
+                            if (part != null)
+                            {
+                                using var ms = new MemoryStream();
+                                if (section.EndsWith(".MIME"))
+                                {
+                                    part.Headers.WriteTo(ms);
+                                    ms.Write(Encoding.UTF8.GetBytes("\r\n"));
+                                }
+                                else
+                                {
+                                    part.WriteTo(ms);
+                                }
+                                literalBytes = ms.ToArray();
+                            }
+                            else
+                            {
+                                literalBytes = Array.Empty<byte>();
+                            }
+                            var isPeek = upper.StartsWith("BODY.PEEK[");
+                            literalItemName = isPeek
+                                ? $"BODY[{item.Substring(item.IndexOf('[') + 1)}"
+                                : $"BODY[{item.Substring(item.IndexOf('[') + 1)}";
+                        }
+                    }
                 }
             }
 
@@ -796,6 +849,41 @@ namespace MailArchiver.Services.ImapServer
             }
             if (current.Length > 0) items.Add(current.ToString());
             return items;
+        }
+
+        /// <summary>
+        /// Resolves a MIME part by IMAP section number (e.g. "1", "1.1", "2").
+        /// </summary>
+        private static MimeKit.MimeEntity? ResolveMimePart(MimeKit.MimeEntity entity, string section)
+        {
+            // Strip .MIME suffix for resolution
+            var cleanSection = section.EndsWith(".MIME")
+                ? section.Substring(0, section.Length - 5)
+                : section;
+
+            var parts = cleanSection.Split('.');
+            var current = entity;
+
+            foreach (var partStr in parts)
+            {
+                if (!int.TryParse(partStr, out int partNum) || partNum < 1)
+                    return null;
+
+                if (current is MimeKit.Multipart multipart)
+                {
+                    if (partNum > multipart.Count) return null;
+                    current = multipart[partNum - 1];
+                }
+                else
+                {
+                    // Non-multipart: only part 1 is valid (the entity itself)
+                    if (partNum == 1)
+                        return current;
+                    return null;
+                }
+            }
+
+            return current;
         }
 
         /// <summary>
