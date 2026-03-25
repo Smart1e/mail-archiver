@@ -35,7 +35,7 @@
 
                 <div class="mb-4">
                     <label asp-for="MBoxFile" class="form-label">@Localizer["SelectMBoxFile"]</label>
-                    <input asp-for="MBoxFile" type="file" class="form-control" accept=".mbox,.mbx" id="mboxFileInput">
+                    <input asp-for="MBoxFile" type="file" class="form-control" accept=".mbox,.mbx,application/mbox,*/*" id="mboxFileInput">
                     <div class="form-text">
                         @string.Format(Localizer["SupportedFormatsWithMax"], Model.MaxFileSizeFormatted)
                     </div>
