@@ -68,7 +68,7 @@ namespace MailArchiver.Services.ImapServer
                     var line = await reader.ReadLineAsync(ct);
                     if (line == null) break; // client disconnected
 
-                    _logger.LogDebug("IMAP << {Line}", line);
+                    _logger.LogInformation("IMAP << {Line}", line);
 
                     var result = await ProcessCommandAsync(line, reader, writer, db, ct);
                     await writer.FlushAsync(ct);

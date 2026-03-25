@@ -13,8 +13,8 @@ namespace MailArchiver.Models
         /// <summary>IP address to bind to. Defaults to all interfaces.</summary>
         public string Host { get; set; } = "0.0.0.0";
 
-        /// <summary>Whether STARTTLS is advertised and supported by the built-in IMAP server.</summary>
-        public bool EnableStartTls { get; set; } = false;
+        /// <summary>Whether STARTTLS is advertised and supported by the built-in IMAP server. Defaults to true (auto-generates a self-signed certificate if no TlsCertificatePath is set).</summary>
+        public bool EnableStartTls { get; set; } = true;
 
         /// <summary>Whether clients must issue STARTTLS before LOGIN/AUTHENTICATE is accepted.</summary>
         public bool RequireStartTls { get; set; } = false;

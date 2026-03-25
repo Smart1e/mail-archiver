@@ -2,6 +2,7 @@ using MailArchiver.Models;
 using Microsoft.Extensions.Options;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
 namespace MailArchiver.Services.ImapServer
@@ -39,21 +40,15 @@ namespace MailArchiver.Services.ImapServer
 
             if (startTlsEnabled)
             {
-                if (string.IsNullOrWhiteSpace(_options.TlsCertificatePath))
-                {
-                    _logger.LogWarning("ImapServer:EnableStartTls is true but ImapServer:TlsCertificatePath is empty. STARTTLS will be disabled.");
-                    startTlsEnabled = false;
-                }
-                else
+                if (!string.IsNullOrWhiteSpace(_options.TlsCertificatePath))
                 {
                     try
                     {
                         var certPath = _options.TlsCertificatePath;
-
                         if (!File.Exists(certPath))
                         {
-                            _logger.LogWarning("ImapServer TLS certificate file was not found at '{CertPath}'. STARTTLS will be disabled.", certPath);
-                            startTlsEnabled = false;
+                            _logger.LogWarning("ImapServer TLS certificate file was not found at '{CertPath}'. Falling back to self-signed certificate.", certPath);
+                            tlsCertificate = GenerateSelfSignedCertificate();
                         }
                         else
                         {
@@ -61,13 +56,20 @@ namespace MailArchiver.Services.ImapServer
                                 certPath,
                                 _options.TlsCertificatePassword,
                                 X509KeyStorageFlags.EphemeralKeySet);
+                            _logger.LogInformation("Loaded IMAP TLS certificate from {CertPath}", certPath);
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Failed to load ImapServer TLS certificate. STARTTLS will be disabled.");
-                        startTlsEnabled = false;
+                        _logger.LogWarning(ex, "Failed to load ImapServer TLS certificate. Falling back to self-signed certificate.");
+                        tlsCertificate = GenerateSelfSignedCertificate();
                     }
+                }
+                else
+                {
+                    // No certificate path provided — auto-generate a self-signed certificate
+                    tlsCertificate = GenerateSelfSignedCertificate();
+                    _logger.LogInformation("Generated self-signed certificate for IMAP STARTTLS");
                 }
             }
 
@@ -134,8 +136,26 @@ namespace MailArchiver.Services.ImapServer
             finally
             {
                 listener.Stop();
+                tlsCertificate?.Dispose();
                 _logger.LogInformation("Built-in IMAP server stopped");
             }
+        }
+
+        private static X509Certificate2 GenerateSelfSignedCertificate()
+        {
+            using var rsa = RSA.Create(2048);
+            var request = new CertificateRequest(
+                "CN=MailArchiver IMAP Server",
+                rsa,
+                HashAlgorithmName.SHA256,
+                RSASignaturePadding.Pkcs1);
+
+            request.CertificateExtensions.Add(
+                new X509KeyUsageExtension(
+                    X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, false));
+
+            var cert = request.CreateSelfSigned(DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddYears(10));
+            return new X509Certificate2(cert.Export(X509ContentType.Pfx));
         }
     }
 }
