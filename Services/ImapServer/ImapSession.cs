@@ -316,19 +316,25 @@ namespace MailArchiver.Services.ImapServer
                 return;
             }
 
+            // Support "archive-user@domain" login format — strip the "archive-" prefix
+            // so Apple Mail can use a unique username that doesn't clash with existing accounts.
+            var lookupUser = user;
+            if (lookupUser.StartsWith("archive-", StringComparison.OrdinalIgnoreCase))
+                lookupUser = lookupUser.Substring(8);
+
             var account = await db.MailAccounts
-                .FirstOrDefaultAsync(a => a.EmailAddress == user && a.ImapPassword != null && a.ImapPassword == pass, ct);
+                .FirstOrDefaultAsync(a => a.EmailAddress == lookupUser && a.ImapPassword != null && a.ImapPassword == pass, ct);
 
             if (account == null)
             {
-                _logger.LogWarning("IMAP LOGIN failed for user {User}", user);
+                _logger.LogWarning("IMAP LOGIN failed for user {User} (lookup: {LookupUser})", user, lookupUser);
                 await writer.WriteLineAsync($"{tag} NO LOGIN failed");
                 return;
             }
 
             _account = account;
             _state = SessionState.Authenticated;
-            _logger.LogInformation("IMAP LOGIN succeeded for {User} (account: {AccountName})", user, account.Name);
+            _logger.LogInformation("IMAP LOGIN succeeded for {User} → {LookupUser} (account: {AccountName})", user, lookupUser, account.Name);
             await writer.WriteLineAsync($"{tag} OK LOGIN completed");
         }
 
@@ -402,19 +408,24 @@ namespace MailArchiver.Services.ImapServer
                 }
             }
 
+            // Support "archive-user@domain" login format — strip the "archive-" prefix
+            var lookupUser = user;
+            if (lookupUser.StartsWith("archive-", StringComparison.OrdinalIgnoreCase))
+                lookupUser = lookupUser.Substring(8);
+
             var account = await db.MailAccounts
-                .FirstOrDefaultAsync(a => a.EmailAddress == user && a.ImapPassword != null && a.ImapPassword == pass, ct);
+                .FirstOrDefaultAsync(a => a.EmailAddress == lookupUser && a.ImapPassword != null && a.ImapPassword == pass, ct);
 
             if (account == null)
             {
-                _logger.LogWarning("IMAP AUTHENTICATE failed for user {User}", user);
+                _logger.LogWarning("IMAP AUTHENTICATE failed for user {User} (lookup: {LookupUser})", user, lookupUser);
                 await writer.WriteLineAsync($"{tag} NO AUTHENTICATE failed");
                 return;
             }
 
             _account = account;
             _state = SessionState.Authenticated;
-            _logger.LogInformation("IMAP AUTHENTICATE succeeded for {User} (account: {AccountName})", user, account.Name);
+            _logger.LogInformation("IMAP AUTHENTICATE succeeded for {User} → {LookupUser} (account: {AccountName})", user, lookupUser, account.Name);
             await writer.WriteLineAsync($"{tag} OK AUTHENTICATE completed");
         }
 
@@ -732,11 +743,24 @@ namespace MailArchiver.Services.ImapServer
                                 using var ms = new MemoryStream();
                                 if (section.EndsWith(".MIME"))
                                 {
+                                    // BODY[N.MIME] — return only the MIME headers of the part
                                     part.Headers.WriteTo(ms);
                                     ms.Write(Encoding.UTF8.GetBytes("\r\n"));
                                 }
+                                else if (part is MimeKit.MimePart mimePart && mimePart.Content != null)
+                                {
+                                    // BODY[N] for a leaf part — return only the encoded content,
+                                    // NOT the MIME headers. Apple Mail expects raw content here.
+                                    mimePart.Content.WriteTo(ms);
+                                }
+                                else if (part is MimeKit.Multipart)
+                                {
+                                    // BODY[N] for a multipart — write the full multipart body
+                                    part.WriteTo(ms);
+                                }
                                 else
                                 {
+                                    // Fallback
                                     part.WriteTo(ms);
                                 }
                                 literalBytes = ms.ToArray();

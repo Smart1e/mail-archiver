@@ -24,5 +24,11 @@ namespace MailArchiver.Models
 
         /// <summary>Password for the TLS certificate (if required).</summary>
         public string? TlsCertificatePassword { get; set; }
+
+        /// <summary>Whether the built-in fake SMTP server is enabled. Defaults to true when IMAP is enabled.</summary>
+        public bool SmtpEnabled { get; set; } = true;
+
+        /// <summary>TCP port for the fake SMTP server. Defaults to 587.</summary>
+        public int SmtpPort { get; set; } = 587;
     }
 }

@@ -336,8 +336,9 @@ builder.Services.AddHostedService<EmailDeletionService>(provider => provider.Get
 
 builder.Services.AddHostedService<MailSyncBackgroundService>();
 
-// Register built-in IMAP server
+// Register built-in IMAP server and fake SMTP server
 builder.Services.AddHostedService<MailArchiver.Services.ImapServer.ImapServerService>();
+builder.Services.AddHostedService<MailArchiver.Services.ImapServer.FakeSmtpService>();
 
 // Register DatabaseMaintenanceService as singleton and hosted service - MUST be the same instance
 builder.Services.AddSingleton<DatabaseMaintenanceService>();

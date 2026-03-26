@@ -137,71 +137,74 @@ namespace MailArchiver.Services.ImapServer
 
         /// <summary>
         /// Builds an RFC 3501 BODYSTRUCTURE string for use in IMAP FETCH responses.
+        /// Generates the structure from the actual MimeMessage to ensure it matches
+        /// what clients will receive when they FETCH body parts.
         /// </summary>
         public static string BuildBodyStructure(ArchivedEmail email)
         {
-            bool hasText = !string.IsNullOrEmpty(email.Body ?? (email.OriginalBodyText != null ? "x" : null));
-            bool hasHtml = !string.IsNullOrEmpty(email.HtmlBody ?? (email.OriginalBodyHtml != null ? "x" : null));
-            bool hasAttachments = email.Attachments.Any();
+            var message = BuildMessage(email);
+            return BuildBodyStructureFromEntity(message.Body);
+        }
 
-            if (!hasText && !hasHtml)
+        /// <summary>
+        /// Recursively builds a BODYSTRUCTURE string from a MimeKit entity tree.
+        /// </summary>
+        private static string BuildBodyStructureFromEntity(MimeKit.MimeEntity entity)
+        {
+            if (entity is MimeKit.Multipart multipart)
             {
-                // Minimal text/plain placeholder
-                return "(\"TEXT\" \"PLAIN\" (\"CHARSET\" \"UTF-8\") NIL NIL \"7BIT\" 0 0)";
-            }
-
-            if (!hasHtml && !hasAttachments)
-            {
-                // Simple text/plain
-                var size = (email.Body?.Length ?? 0);
-                var lines = CountLines(email.Body);
-                return $"(\"TEXT\" \"PLAIN\" (\"CHARSET\" \"UTF-8\") NIL NIL \"7BIT\" {size} {lines})";
-            }
-
-            // Build multipart structure
-            var parts = new List<string>();
-
-            if (hasText)
-            {
-                var size = (email.Body?.Length ?? 0);
-                var lines = CountLines(email.Body);
-                parts.Add($"(\"TEXT\" \"PLAIN\" (\"CHARSET\" \"UTF-8\") NIL NIL \"7BIT\" {size} {lines})");
-            }
-
-            if (hasHtml)
-            {
-                var size = (email.HtmlBody?.Length ?? 0);
-                var lines = CountLines(email.HtmlBody);
-                parts.Add($"(\"TEXT\" \"HTML\" (\"CHARSET\" \"UTF-8\") NIL NIL \"7BIT\" {size} {lines})");
-            }
-
-            if (hasAttachments)
-            {
-                foreach (var att in email.Attachments)
+                var sb = new StringBuilder("(");
+                foreach (var child in multipart)
                 {
-                    var attParts = (att.ContentType ?? "application/octet-stream").Split('/', 2);
-                    var attType = attParts.Length > 0 ? attParts[0].ToUpperInvariant() : "APPLICATION";
-                    var attSubtype = attParts.Length > 1 ? attParts[1].ToUpperInvariant() : "OCTET-STREAM";
-                    var attName = EncodeNilOrString(att.FileName);
-                    parts.Add($"(\"{attType}\" \"{attSubtype}\" (\"NAME\" {attName}) NIL NIL \"BASE64\" {att.Size})");
+                    sb.Append(BuildBodyStructureFromEntity(child));
+                }
+                var subtype = multipart.ContentType.MediaSubtype.ToUpperInvariant();
+                sb.Append($" \"{subtype}\" NIL NIL NIL)");
+                return sb.ToString();
+            }
+
+            if (entity is MimeKit.MimePart part)
+            {
+                var type = part.ContentType.MediaType.ToUpperInvariant();
+                var subtype = part.ContentType.MediaSubtype.ToUpperInvariant();
+                var charset = part.ContentType.Charset;
+                var encoding = (part.ContentTransferEncoding == ContentEncoding.Base64) ? "BASE64"
+                    : (part.ContentTransferEncoding == ContentEncoding.QuotedPrintable) ? "QUOTED-PRINTABLE"
+                    : "7BIT";
+
+                // Params
+                string paramStr;
+                if (!string.IsNullOrEmpty(charset))
+                    paramStr = $"(\"CHARSET\" \"{charset.ToUpperInvariant()}\")";
+                else if (!string.IsNullOrEmpty(part.FileName))
+                    paramStr = $"(\"NAME\" {EncodeNilOrString(part.FileName)})";
+                else
+                    paramStr = "NIL";
+
+                // Get size
+                long size = 0;
+                int lines = 0;
+                if (part.Content != null)
+                {
+                    using var ms = new MemoryStream();
+                    part.Content.DecodeTo(ms);
+                    size = ms.Length;
+                    if (type == "TEXT")
+                    {
+                        ms.Position = 0;
+                        var text = Encoding.UTF8.GetString(ms.ToArray());
+                        lines = text.Count(c => c == '\n') + 1;
+                    }
                 }
 
-                // Wrap text + html as alternative, then mixed with attachments
-                if (hasText && hasHtml)
-                {
-                    var altParts = string.Join(" ", parts.Take(2));
-                    var mixedBody = $"({altParts} \"ALTERNATIVE\" NIL NIL NIL)";
-                    var attachParts = string.Join(" ", parts.Skip(2));
-                    return $"({mixedBody} {attachParts} \"MIXED\" NIL NIL NIL)";
-                }
-
-                return $"({string.Join(" ", parts)} \"MIXED\" NIL NIL NIL)";
+                if (type == "TEXT")
+                    return $"(\"{type}\" \"{subtype}\" {paramStr} NIL NIL \"{encoding}\" {size} {lines})";
+                else
+                    return $"(\"{type}\" \"{subtype}\" {paramStr} NIL NIL \"{encoding}\" {size})";
             }
 
-            if (hasText && hasHtml)
-                return $"({string.Join(" ", parts)} \"ALTERNATIVE\" NIL NIL NIL)";
-
-            return parts[0];
+            // Fallback
+            return "(\"APPLICATION\" \"OCTET-STREAM\" NIL NIL NIL \"7BIT\" 0)";
         }
 
         // --- Private helpers ---
