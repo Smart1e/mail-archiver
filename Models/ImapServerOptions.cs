@@ -39,5 +39,8 @@ namespace MailArchiver.Models
 
         /// <summary>Path where the auto-generated CA certificate (.cer) is exported for client trust.</summary>
         public string CaCertExportPath { get; set; } = "/app/certs/mailarchiver-ca.cer";
+
+        /// <summary>Path where the auto-generated server PFX is exported so the SMTP service can share it.</summary>
+        public string ServerCertExportPath { get; set; } = "/app/certs/mailarchiver-server.pfx";
     }
 }

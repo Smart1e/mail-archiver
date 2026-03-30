@@ -10,15 +10,23 @@ services:
     ports:
       - "5001:5000"
       - "143:143"
+      - "993:993"
+      - "465:465"
+      - "25:25"
     environment:
       - ImapServer__Enabled=true
       - ImapServer__Port=143
+      - ImapServer__ImapsPort=993
+      - ImapServer__SmtpPort=25
+      - ImapServer__SmtpsPort=465
+      - ImapServer__CaCertExportPath=/app/certs/mailarchiver-ca.cer
     networks:
       - postgres
     volumes:
       - ./appsettings.json:/app/appsettings.json
       - ./logs:/app/logs
       - ./data-protection-keys:/app/DataProtection-Keys
+      - ./certs:/app/certs
     depends_on:
       - postgres
 

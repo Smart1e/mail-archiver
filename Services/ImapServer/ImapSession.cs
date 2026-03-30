@@ -24,6 +24,7 @@ namespace MailArchiver.Services.ImapServer
         private readonly bool _startTlsEnabled;
         private readonly X509Certificate2? _tlsCertificate;
         private readonly bool _requireStartTls;
+        private readonly Stream? _preAuthenticatedStream;
 
         private SessionState _state = SessionState.NotAuthenticated;
         private bool _isTls;
@@ -37,7 +38,8 @@ namespace MailArchiver.Services.ImapServer
             ILogger logger,
             bool startTlsEnabled,
             X509Certificate2? tlsCertificate,
-            bool requireStartTls)
+            bool requireStartTls,
+            Stream? preAuthenticatedStream = null)
         {
             _client = client;
             _scopeFactory = scopeFactory;
@@ -45,6 +47,7 @@ namespace MailArchiver.Services.ImapServer
             _startTlsEnabled = startTlsEnabled;
             _tlsCertificate = tlsCertificate;
             _requireStartTls = requireStartTls;
+            _preAuthenticatedStream = preAuthenticatedStream;
         }
 
         public async Task HandleAsync(CancellationToken ct)
@@ -52,11 +55,12 @@ namespace MailArchiver.Services.ImapServer
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MailArchiverDbContext>();
 
-            Stream stream = _client.GetStream();
+            Stream stream = _preAuthenticatedStream ?? (Stream)_client.GetStream();
+            _isTls = _preAuthenticatedStream != null; // Already TLS if we got a pre-authenticated stream
             var (reader, writer) = CreateTextAdapters(stream);
 
             var remote = _client.Client.RemoteEndPoint?.ToString() ?? "unknown";
-            _logger.LogInformation("IMAP client connected from {Remote}", remote);
+            _logger.LogInformation("IMAP client connected from {Remote} (TLS: {IsTls})", remote, _isTls);
 
             try
             {
