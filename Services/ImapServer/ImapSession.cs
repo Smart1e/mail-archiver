@@ -482,7 +482,9 @@ namespace MailArchiver.Services.ImapServer
                     .MaxAsync(e => e.Id, ct)
                 : 0;
 
-            await writer.WriteLineAsync($"* STATUS \"{EncodeMailboxName(folder)}\" (MESSAGES {count} RECENT 0 UIDNEXT {maxId + 1} UIDVALIDITY 1 UNSEEN 0)");
+            // Use account ID as UIDVALIDITY — must match SELECT response
+            var uidValidity = _account!.Id;
+            await writer.WriteLineAsync($"* STATUS \"{EncodeMailboxName(folder)}\" (MESSAGES {count} RECENT 0 UIDNEXT {maxId + 1} UIDVALIDITY {uidValidity} UNSEEN 0)");
             await writer.WriteLineAsync($"{tag} OK STATUS completed");
         }
 
@@ -515,9 +517,12 @@ namespace MailArchiver.Services.ImapServer
             var count = _folderMessages.Count;
             var uidNext = count > 0 ? _folderMessages.Max(e => e.Id) + 1 : 1;
 
+            // Use account ID as UIDVALIDITY — stable across sessions, unique per account
+            var uidValidity = _account!.Id;
+
             await writer.WriteLineAsync($"* {count} EXISTS");
             await writer.WriteLineAsync("* 0 RECENT");
-            await writer.WriteLineAsync("* OK [UIDVALIDITY 1] UIDs valid");
+            await writer.WriteLineAsync($"* OK [UIDVALIDITY {uidValidity}] UIDs valid");
             await writer.WriteLineAsync($"* OK [UIDNEXT {uidNext}] Predicted next UID");
             await writer.WriteLineAsync(@"* FLAGS (\Seen \Answered \Flagged \Deleted \Draft)");
             await writer.WriteLineAsync(@"* OK [PERMANENTFLAGS ()] Read-only mailbox");

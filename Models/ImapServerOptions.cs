@@ -28,7 +28,16 @@ namespace MailArchiver.Models
         /// <summary>Whether the built-in fake SMTP server is enabled. Defaults to true when IMAP is enabled.</summary>
         public bool SmtpEnabled { get; set; } = true;
 
-        /// <summary>TCP port for the fake SMTP server. Defaults to 587.</summary>
-        public int SmtpPort { get; set; } = 587;
+        /// <summary>TCP port for the fake SMTP server. Defaults to 25.</summary>
+        public int SmtpPort { get; set; } = 25;
+
+        /// <summary>TCP port for implicit-TLS IMAP (IMAPS). Defaults to 993. Set to 0 to disable.</summary>
+        public int ImapsPort { get; set; } = 993;
+
+        /// <summary>TCP port for implicit-TLS SMTP (SMTPS). Defaults to 465. Set to 0 to disable.</summary>
+        public int SmtpsPort { get; set; } = 465;
+
+        /// <summary>Path where the auto-generated CA certificate (.cer) is exported for client trust.</summary>
+        public string CaCertExportPath { get; set; } = "/app/certs/mailarchiver-ca.cer";
     }
 }
