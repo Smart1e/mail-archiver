@@ -35,6 +35,11 @@ namespace MailArchiver.Models
         public DateTime? HashCreatedAt { get; set; }
         public bool IsLocked { get; set; } = false;
 
+        // Cached RFC822 size reported to IMAP clients. Computed once on first FETCH and reused on
+        // every subsequent FETCH so the value is stable across sessions — a fluctuating size causes
+        // Apple Mail to treat the message as changed and re-download it.
+        public int? CachedRfc822Size { get; set; }
+
         public virtual MailAccount MailAccount { get; set; }
         public virtual ICollection<EmailAttachment> Attachments { get; set; } = new List<EmailAttachment>();
     }

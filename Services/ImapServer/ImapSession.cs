@@ -149,7 +149,22 @@ namespace MailArchiver.Services.ImapServer
 
         private string BuildCapability()
         {
-            var capabilities = new List<string> { "IMAP4rev1", "LITERAL+" };
+            // These extensions make Apple Mail happy:
+            //   ID, NAMESPACE — expected during initial handshake, Apple Mail logs errors without them.
+            //   IDLE          — enables push-style updates instead of polling every few seconds.
+            //   SPECIAL-USE   — lets Apple Mail map Sent/Trash/Archive folders to the right icons/behaviors.
+            //   UIDPLUS       — advertised so clients know UID commands behave sensibly (we're UID-stable).
+            //   LITERAL+      — non-synchronizing literals, Apple Mail uses these heavily.
+            var capabilities = new List<string>
+            {
+                "IMAP4rev1",
+                "LITERAL+",
+                "ID",
+                "NAMESPACE",
+                "IDLE",
+                "SPECIAL-USE",
+                "UIDPLUS",
+            };
 
             if (_startTlsEnabled && !_isTls)
             {
@@ -223,6 +238,28 @@ namespace MailArchiver.Services.ImapServer
                     await writer.WriteLineAsync($"{tag} OK NOOP completed");
                     break;
 
+                case "ID":
+                    // Apple Mail sends ID right after greeting and expects an ID response.
+                    // We identify as MailArchiver but don't echo the client-supplied values.
+                    await writer.WriteLineAsync($"* ID (\"name\" \"MailArchiver\" \"version\" \"{GetAssemblyVersion()}\")");
+                    await writer.WriteLineAsync($"{tag} OK ID completed");
+                    break;
+
+                case "NAMESPACE":
+                    // Single personal namespace, "/" as hierarchy delimiter. No shared or other-users.
+                    await writer.WriteLineAsync("* NAMESPACE ((\"\" \"/\")) NIL NIL");
+                    await writer.WriteLineAsync($"{tag} OK NAMESPACE completed");
+                    break;
+
+                case "IDLE":
+                    await HandleIdleAsync(tag, reader, writer, ct);
+                    break;
+
+                case "ENABLE":
+                    // We don't actually honor any extensions, but acknowledging keeps Apple Mail happy.
+                    await writer.WriteLineAsync($"{tag} OK ENABLE completed");
+                    break;
+
                 case "LOGOUT":
                     await writer.WriteLineAsync("* BYE MailArchiver IMAP4rev1 Server logging out");
                     await writer.WriteLineAsync($"{tag} OK LOGOUT completed");
@@ -292,8 +329,18 @@ namespace MailArchiver.Services.ImapServer
                     break;
 
                 case "STORE":
+                    // Read-only mailbox: acknowledge silently. Returning NO caused Apple Mail to
+                    // treat every sync as a failure and repeatedly re-download all messages.
+                    // The client's local flag state wins; we never persist changes.
+                    await writer.WriteLineAsync($"{tag} OK STORE completed");
+                    break;
+
                 case "COPY":
-                    await writer.WriteLineAsync($"{tag} NO [{command}] Read-only mailbox");
+                    await writer.WriteLineAsync($"{tag} NO [CANNOT] Read-only archive cannot accept copies");
+                    break;
+
+                case "APPEND":
+                    await writer.WriteLineAsync($"{tag} NO [CANNOT] Read-only archive cannot accept appended messages");
                     break;
 
                 default:
@@ -456,7 +503,10 @@ namespace MailArchiver.Services.ImapServer
             foreach (var folder in folders)
             {
                 var encodedFolder = EncodeMailboxName(folder);
-                await writer.WriteLineAsync($"* LIST (\\HasNoChildren) \"/\" \"{encodedFolder}\"");
+                var attrs = new List<string> { @"\HasNoChildren" };
+                var specialUse = DetectSpecialUseFlag(folder);
+                if (specialUse != null) attrs.Add(specialUse);
+                await writer.WriteLineAsync($"* LIST ({string.Join(" ", attrs)}) \"/\" \"{encodedFolder}\"");
             }
 
             await writer.WriteLineAsync($"{tag} OK LIST completed");
@@ -553,8 +603,10 @@ namespace MailArchiver.Services.ImapServer
                     await HandleSearchAsync(tag, subArgs, isUid: true, writer, db, ct);
                     break;
                 case "STORE":
+                    await writer.WriteLineAsync($"{tag} OK UID STORE completed");
+                    break;
                 case "COPY":
-                    await writer.WriteLineAsync($"{tag} NO [READ-ONLY] Read-only mailbox");
+                    await writer.WriteLineAsync($"{tag} NO [CANNOT] Read-only archive cannot accept copies");
                     break;
                 default:
                     await writer.WriteLineAsync($"{tag} BAD Unknown UID command {subCommand}");
@@ -578,26 +630,50 @@ namespace MailArchiver.Services.ImapServer
             var matching = new List<int>();
             var upperArgs = args.ToUpperInvariant().Trim();
 
+            // Strip leading CHARSET clause (e.g. `CHARSET UTF-8 ALL` → `ALL`). Apple Mail prefixes it.
+            if (upperArgs.StartsWith("CHARSET "))
+            {
+                var afterCharset = upperArgs.IndexOf(' ', 8);
+                if (afterCharset > 0)
+                {
+                    args = args.Substring(afterCharset + 1).Trim();
+                    upperArgs = args.ToUpperInvariant().Trim();
+                }
+            }
+
             for (int i = 0; i < _folderMessages.Count; i++)
             {
                 var email = _folderMessages[i];
-                bool match = true;
+                bool match;
 
-                if (upperArgs == "ALL" || upperArgs == "")
+                // Treat whole-mailbox predicates as "match all" — our archive has no per-message
+                // flag state, so UNSEEN/SEEN/FLAGGED/etc. all reduce to "all messages". This is
+                // what Apple Mail actually needs during sync; it just wants a complete UID list.
+                if (upperArgs == "ALL" || upperArgs == ""
+                    || upperArgs == "UNSEEN" || upperArgs == "SEEN"
+                    || upperArgs == "FLAGGED" || upperArgs == "UNFLAGGED"
+                    || upperArgs == "ANSWERED" || upperArgs == "UNANSWERED"
+                    || upperArgs == "DRAFT" || upperArgs == "UNDRAFT"
+                    || upperArgs == "DELETED" || upperArgs == "UNDELETED"
+                    || upperArgs == "NEW" || upperArgs == "OLD" || upperArgs == "RECENT"
+                    || upperArgs == "NOT DELETED")
                 {
                     match = true;
                 }
                 else if (upperArgs.StartsWith("SINCE "))
                 {
                     var dateStr = args.Substring(6).Trim().Trim('"');
-                    if (DateTime.TryParse(dateStr, out var since))
-                        match = email.SentDate >= since;
+                    match = DateTime.TryParse(dateStr, out var since) && email.SentDate >= since;
                 }
                 else if (upperArgs.StartsWith("BEFORE "))
                 {
                     var dateStr = args.Substring(7).Trim().Trim('"');
-                    if (DateTime.TryParse(dateStr, out var before))
-                        match = email.SentDate < before;
+                    match = DateTime.TryParse(dateStr, out var before) && email.SentDate < before;
+                }
+                else if (upperArgs.StartsWith("ON "))
+                {
+                    var dateStr = args.Substring(3).Trim().Trim('"');
+                    match = DateTime.TryParse(dateStr, out var on) && email.SentDate.Date == on.Date;
                 }
                 else if (upperArgs.StartsWith("SUBJECT "))
                 {
@@ -613,6 +689,43 @@ namespace MailArchiver.Services.ImapServer
                 {
                     var term = args.Substring(3).Trim().Trim('"');
                     match = email.To?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false;
+                }
+                else if (upperArgs.StartsWith("CC "))
+                {
+                    var term = args.Substring(3).Trim().Trim('"');
+                    match = email.Cc?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false;
+                }
+                else if (upperArgs.StartsWith("BODY ") || upperArgs.StartsWith("TEXT "))
+                {
+                    var skip = upperArgs.StartsWith("BODY ") ? 5 : 5;
+                    var term = args.Substring(skip).Trim().Trim('"');
+                    match = (email.Body?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                         || (email.HtmlBody?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                         || (email.Subject?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false);
+                }
+                else if (upperArgs.StartsWith("HEADER "))
+                {
+                    // HEADER <field> <value> — only Message-ID commonly queried by Apple Mail
+                    var rest = args.Substring(7).Trim();
+                    var fieldEnd = rest.IndexOf(' ');
+                    if (fieldEnd > 0)
+                    {
+                        var field = rest.Substring(0, fieldEnd);
+                        var term = rest.Substring(fieldEnd + 1).Trim().Trim('"');
+                        if (string.Equals(field, "Message-ID", StringComparison.OrdinalIgnoreCase))
+                            match = email.MessageId?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false;
+                        else
+                            match = true; // unknown header — don't filter anything out
+                    }
+                    else
+                    {
+                        match = true;
+                    }
+                }
+                else
+                {
+                    // Unknown criterion — be permissive so Apple Mail's sync doesn't stall.
+                    match = true;
                 }
 
                 if (match)
@@ -671,6 +784,18 @@ namespace MailArchiver.Services.ImapServer
                 await WriteFetchResponseAsync(msn, email, itemsStr, writer, ct);
             }
 
+            // Persist any CachedRfc822Size values computed on first access so subsequent sessions
+            // return the same stable value without recomputing.
+            try
+            {
+                if (db.ChangeTracker.HasChanges())
+                    await db.SaveChangesAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to persist RFC822.SIZE cache updates; will retry on next FETCH");
+            }
+
             await writer.WriteLineAsync($"{tag} OK FETCH completed");
         }
 
@@ -707,12 +832,60 @@ namespace MailArchiver.Services.ImapServer
                 else if (upper.StartsWith("BODY[HEADER") || upper.StartsWith("BODY.PEEK[HEADER"))
                 {
                     var msg = ImapMessageBuilder.BuildMessage(email);
+                    var openBracket = item.IndexOf('[');
+                    var closeBracket = item.LastIndexOf(']');
+                    var section = (openBracket >= 0 && closeBracket > openBracket)
+                        ? item.Substring(openBracket + 1, closeBracket - openBracket - 1)
+                        : "HEADER";
+                    var sectionUpper = section.ToUpperInvariant();
+
                     using var ms = new MemoryStream();
-                    msg.Headers.WriteTo(ms);
-                    var crlf = Encoding.UTF8.GetBytes("\r\n");
-                    ms.Write(crlf, 0, crlf.Length);
+                    var isPeek = upper.StartsWith("BODY.PEEK[");
+
+                    if (sectionUpper.StartsWith("HEADER.FIELDS.NOT"))
+                    {
+                        // Apple Mail uses this during initial sync: "give me every header EXCEPT these"
+                        var excluded = ParseHeaderFieldList(section);
+                        foreach (var header in msg.Headers)
+                        {
+                            if (excluded.Any(f => string.Equals(f, header.Field, StringComparison.OrdinalIgnoreCase)))
+                                continue;
+                            var line = $"{header.Field}: {header.Value}\r\n";
+                            var bytes = Encoding.UTF8.GetBytes(line);
+                            ms.Write(bytes, 0, bytes.Length);
+                        }
+                        ms.Write(Encoding.UTF8.GetBytes("\r\n"), 0, 2);
+                    }
+                    else if (sectionUpper.StartsWith("HEADER.FIELDS"))
+                    {
+                        // Most common in Apple Mail: "give me only these headers" for the message list.
+                        // Without this path, Apple Mail falls through to BODY[] and fetches every message
+                        // in full on first sync — slow, and it trips the re-download loop.
+                        var wanted = ParseHeaderFieldList(section);
+                        foreach (var field in wanted)
+                        {
+                            foreach (var header in msg.Headers)
+                            {
+                                if (!string.Equals(header.Field, field, StringComparison.OrdinalIgnoreCase))
+                                    continue;
+                                var line = $"{header.Field}: {header.Value}\r\n";
+                                var bytes = Encoding.UTF8.GetBytes(line);
+                                ms.Write(bytes, 0, bytes.Length);
+                            }
+                        }
+                        ms.Write(Encoding.UTF8.GetBytes("\r\n"), 0, 2);
+                    }
+                    else
+                    {
+                        // Plain BODY[HEADER] — full headers
+                        msg.Headers.WriteTo(ms);
+                        ms.Write(Encoding.UTF8.GetBytes("\r\n"), 0, 2);
+                    }
+
                     literalBytes = ms.ToArray();
-                    literalItemName = "BODY[HEADER]";
+                    // Preserve the exact section string the client requested so the response matches
+                    // (Apple Mail matches the item name in the reply against the one it sent).
+                    literalItemName = $"BODY[{section}]";
                 }
                 else if (upper.StartsWith("BODY[TEXT") || upper.StartsWith("BODY.PEEK[TEXT"))
                 {
@@ -971,6 +1144,98 @@ namespace MailArchiver.Services.ImapServer
         private static string EncodeMailboxName(string name)
         {
             return name.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
+
+        /// <summary>
+        /// Parses the header-field list from a section spec like "HEADER.FIELDS (From To Subject Date)"
+        /// or "HEADER.FIELDS.NOT (Received X-Spam-Status)" into a list of field names.
+        /// </summary>
+        private static List<string> ParseHeaderFieldList(string section)
+        {
+            var openParen = section.IndexOf('(');
+            var closeParen = section.LastIndexOf(')');
+            if (openParen < 0 || closeParen <= openParen) return new List<string>();
+            var inside = section.Substring(openParen + 1, closeParen - openParen - 1);
+            return inside
+                .Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim().Trim('"'))
+                .Where(s => s.Length > 0)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Maps a folder name to its RFC 6154 special-use attribute, or null for plain folders.
+        /// Apple Mail relies on these to render icons, route Sent/Trash/Drafts correctly, and
+        /// suggest the archive folder for the Archive gesture.
+        /// </summary>
+        private static string? DetectSpecialUseFlag(string folderName)
+        {
+            if (string.IsNullOrWhiteSpace(folderName)) return null;
+            var lower = folderName.ToLowerInvariant();
+
+            if (lower == "sent" || lower.Contains("sent items") || lower.Contains("sent messages") || lower.EndsWith("/sent"))
+                return @"\Sent";
+            if (lower == "trash" || lower == "deleted items" || lower == "deleted messages" || lower == "bin" || lower.EndsWith("/trash"))
+                return @"\Trash";
+            if (lower == "drafts" || lower.EndsWith("/drafts"))
+                return @"\Drafts";
+            if (lower == "junk" || lower == "spam" || lower == "junk e-mail" || lower.EndsWith("/junk") || lower.EndsWith("/spam"))
+                return @"\Junk";
+            if (lower == "archive" || lower.Contains("all mail") || lower.EndsWith("/archive"))
+                return @"\Archive";
+            return null;
+        }
+
+        /// <summary>
+        /// Returns the assembly version, reported in the ID response so clients can log which
+        /// server they're talking to.
+        /// </summary>
+        private static string GetAssemblyVersion()
+        {
+            var asm = typeof(ImapSession).Assembly;
+            var version = asm.GetName().Version;
+            return version != null ? version.ToString(3) : "0.0.0";
+        }
+
+        /// <summary>
+        /// IDLE (RFC 2177): client enters IDLE, we send untagged responses as state changes, and the
+        /// session exits IDLE when the client sends "DONE". Since the archive is read-only we never
+        /// have unsolicited updates to push — we just hold the connection and wait for DONE.
+        /// RFC recommends a server timeout of no more than 29 minutes to avoid NAT/proxy drops.
+        /// </summary>
+        private async Task HandleIdleAsync(string tag, StreamReader reader, StreamWriter writer, CancellationToken ct)
+        {
+            await writer.WriteLineAsync("+ idling");
+            await writer.FlushAsync(ct);
+
+            using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            idleCts.CancelAfter(TimeSpan.FromMinutes(29));
+
+            try
+            {
+                while (!idleCts.IsCancellationRequested)
+                {
+                    var line = await reader.ReadLineAsync(idleCts.Token);
+                    if (line == null) return; // client disconnected
+                    if (line.Trim().Equals("DONE", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await writer.WriteLineAsync($"{tag} OK IDLE terminated");
+                        return;
+                    }
+                    // Ignore any other input during IDLE (client shouldn't send anything else).
+                }
+
+                // 29-minute window expired — close the IDLE gracefully so the client reconnects.
+                await writer.WriteLineAsync($"{tag} OK IDLE terminated by server timeout");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                await writer.WriteLineAsync($"{tag} OK IDLE terminated by server timeout");
+            }
         }
     }
 }

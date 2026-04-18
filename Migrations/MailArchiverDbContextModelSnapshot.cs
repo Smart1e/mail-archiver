@@ -116,6 +116,9 @@ namespace MailArchiver.Migrations
                     b.Property<string>("BodyUntruncatedText")
                         .HasColumnType("text");
 
+                    b.Property<int?>("CachedRfc822Size")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Cc")
                         .IsRequired()
                         .HasColumnType("text");

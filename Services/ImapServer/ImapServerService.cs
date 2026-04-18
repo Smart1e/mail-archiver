@@ -1,6 +1,8 @@
 using MailArchiver.Models;
 using Microsoft.Extensions.Options;
+using System.Formats.Asn1;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -72,7 +74,10 @@ namespace MailArchiver.Services.ImapServer
 
             if (tlsCertificate == null)
             {
-                // Try to load previously generated certs (persistent across restarts)
+                var desiredSans = ResolveSubjectAlternativeNames();
+
+                // Try to load previously generated certs (persistent across restarts),
+                // but regenerate if the SAN set no longer matches what the config asks for.
                 var serverPfxPath = _options.ServerCertExportPath;
                 var caCerPath = _options.CaCertExportPath;
 
@@ -80,11 +85,21 @@ namespace MailArchiver.Services.ImapServer
                 {
                     try
                     {
-                        tlsCertificate = new X509Certificate2(
+                        var existing = new X509Certificate2(
                             serverPfxPath,
                             (string?)null,
                             X509KeyStorageFlags.EphemeralKeySet);
-                        _logger.LogInformation("Loaded existing server certificate from {Path} (persistent)", serverPfxPath);
+
+                        if (CertificateCoversSans(existing, desiredSans))
+                        {
+                            tlsCertificate = existing;
+                            _logger.LogInformation("Loaded existing server certificate from {Path} (SAN set matches current config)", serverPfxPath);
+                        }
+                        else
+                        {
+                            existing.Dispose();
+                            _logger.LogInformation("Existing server cert SAN set does not cover current config — will regenerate");
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -95,7 +110,7 @@ namespace MailArchiver.Services.ImapServer
 
                 if (tlsCertificate == null)
                 {
-                    var (caCert, serverCert) = GenerateCaAndServerCertificate();
+                    var (caCert, serverCert) = GenerateCaAndServerCertificate(desiredSans);
                     tlsCertificate = serverCert;
 
                     // Export the CA certificate so it can be embedded in .mobileconfig profiles
@@ -103,7 +118,7 @@ namespace MailArchiver.Services.ImapServer
                     // Export the server PFX so the fake SMTP service can share it
                     ExportServerCertificate(serverCert);
                     caCert.Dispose();
-                    _logger.LogInformation("Generated and saved new CA + server certificates (will persist across restarts)");
+                    _logger.LogInformation("Generated and saved new CA + server certificates with SANs: {Sans}", string.Join(", ", desiredSans));
                 }
             }
 
@@ -227,10 +242,98 @@ namespace MailArchiver.Services.ImapServer
         // ── Certificate generation ─────────────────────────────────────────
 
         /// <summary>
+        /// Collects SAN entries for the auto-generated server cert. Always includes loopback and
+        /// localhost, plus every non-loopback IPv4 address on local interfaces (so LAN clients work).
+        /// Adds TAILSCALE_IP if set, then any extra entries from ImapServer:SubjectAlternativeNames.
+        /// Entries that parse as IP addresses are added as IP SANs; everything else becomes a DNS SAN.
+        /// </summary>
+        private List<string> ResolveSubjectAlternativeNames()
+        {
+            var sans = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+                "mailarchiver",
+                "mailarchiver.local",
+            };
+
+            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                foreach (var ip in ni.GetIPProperties().UnicastAddresses)
+                {
+                    if (IPAddress.IsLoopback(ip.Address)) continue;
+                    if (ip.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+                    sans.Add(ip.Address.ToString());
+                }
+            }
+
+            var tailscaleIp = Environment.GetEnvironmentVariable("TAILSCALE_IP");
+            if (!string.IsNullOrWhiteSpace(tailscaleIp))
+                sans.Add(tailscaleIp.Trim());
+
+            foreach (var extra in _options.SubjectAlternativeNames ?? new List<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(extra))
+                    sans.Add(extra.Trim());
+            }
+
+            return sans.ToList();
+        }
+
+        /// <summary>
+        /// Returns true if the certificate's SAN extension covers every entry in the desired set.
+        /// Used to decide whether to regenerate when the configured SAN list changes.
+        /// </summary>
+        private static bool CertificateCoversSans(X509Certificate2 cert, IEnumerable<string> desiredSans)
+        {
+            var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var ext in cert.Extensions)
+            {
+                if (ext.Oid?.Value != "2.5.29.17") continue; // subjectAltName
+                try
+                {
+                    var reader = new AsnReader(ext.RawData, AsnEncodingRules.DER);
+                    var seq = reader.ReadSequence();
+                    while (seq.HasData)
+                    {
+                        var tag = seq.PeekTag();
+                        if (tag.TagClass == TagClass.ContextSpecific && tag.TagValue == 2)
+                        {
+                            // dNSName — IA5String
+                            found.Add(seq.ReadCharacterString(UniversalTagNumber.IA5String, tag));
+                        }
+                        else if (tag.TagClass == TagClass.ContextSpecific && tag.TagValue == 7)
+                        {
+                            // iPAddress — OCTET STRING (4 bytes IPv4 or 16 bytes IPv6)
+                            var bytes = seq.ReadOctetString(tag);
+                            try { found.Add(new IPAddress(bytes).ToString()); } catch { }
+                        }
+                        else
+                        {
+                            seq.ReadEncodedValue();
+                        }
+                    }
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            foreach (var want in desiredSans)
+            {
+                if (!found.Contains(want)) return false;
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Generates a self-signed CA certificate and a server certificate signed by that CA.
         /// The CA cert can be trusted by clients; the server cert is used for TLS.
         /// </summary>
-        private (X509Certificate2 CaCert, X509Certificate2 ServerCert) GenerateCaAndServerCertificate()
+        private (X509Certificate2 CaCert, X509Certificate2 ServerCert) GenerateCaAndServerCertificate(IEnumerable<string> sanEntries)
         {
             // ── 1. Create the CA ──
             using var caKey = RSA.Create(2048);
@@ -266,14 +369,15 @@ namespace MailArchiver.Services.ImapServer
                 new X509EnhancedKeyUsageExtension(
                     new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, false)); // TLS Server
 
-            // Subject Alternative Names — include common IPs and localhost
+            // Subject Alternative Names — resolved dynamically from local interfaces + config
             var sanBuilder = new SubjectAlternativeNameBuilder();
-            sanBuilder.AddIpAddress(IPAddress.Parse("172.16.10.106"));
-            sanBuilder.AddIpAddress(IPAddress.Loopback);
-            sanBuilder.AddIpAddress(IPAddress.IPv6Loopback);
-            sanBuilder.AddDnsName("localhost");
-            sanBuilder.AddDnsName("mailarchiver");
-            sanBuilder.AddDnsName("mailarchiver.local");
+            foreach (var entry in sanEntries)
+            {
+                if (IPAddress.TryParse(entry, out var ip))
+                    sanBuilder.AddIpAddress(ip);
+                else
+                    sanBuilder.AddDnsName(entry);
+            }
             serverRequest.CertificateExtensions.Add(sanBuilder.Build());
 
             // Sign with CA

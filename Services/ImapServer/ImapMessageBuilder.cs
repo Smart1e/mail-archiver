@@ -18,9 +18,13 @@ namespace MailArchiver.Services.ImapServer
         {
             var message = new MimeMessage();
 
-            // Message-ID
-            if (!string.IsNullOrEmpty(email.MessageId))
-                message.MessageId = email.MessageId.Trim('<', '>');
+            // Rewrite Message-ID so Apple Mail doesn't dedupe archived mail against the user's
+            // live account when both are connected. The original ID is kept as a suffix so it's
+            // recoverable; In-Reply-To / References headers on other archived mail continue to
+            // point at the original (threading inside the archive account is unaffected for
+            // messages that reference by original ID — cross-account threading is broken by
+            // design, which is what eliminates the duplicates).
+            message.MessageId = BuildArchiveMessageId(email);
 
             // Date
             message.Date = new DateTimeOffset(email.SentDate, TimeSpan.Zero);
@@ -105,16 +109,32 @@ namespace MailArchiver.Services.ImapServer
         }
 
         /// <summary>
-        /// Returns an estimated byte size of the serialized message without fully constructing it.
+        /// Returns the RFC822 byte size. Computed from the fully-reconstructed message the first
+        /// time it is requested, then cached on the entity so every subsequent FETCH returns the
+        /// same value. Apple Mail treats a changing RFC822.SIZE as a changed message and re-downloads it.
         /// </summary>
         public static int GetMessageSize(ArchivedEmail email)
         {
-            // Rough estimation: headers + body + attachments
-            var headerSize = 500; // approximate fixed header overhead
-            var bodySize = (email.Body?.Length ?? 0) + (email.HtmlBody?.Length ?? 0);
-            var attachSize = email.Attachments.Sum(a => (int)a.Size);
-            // Base64 encoding adds ~33% overhead for attachments
-            return headerSize + bodySize + (int)(attachSize * 1.34);
+            if (email.CachedRfc822Size.HasValue)
+                return email.CachedRfc822Size.Value;
+
+            var msg = BuildMessage(email);
+            var size = SerializeMessage(msg).Length;
+            email.CachedRfc822Size = size;
+            return size;
+        }
+
+        /// <summary>
+        /// Constructs a Message-ID that is unique to the archive presentation, so Apple Mail and
+        /// other clients that dedupe by Message-ID across accounts don't hide archived copies when
+        /// the user also has the live account connected.
+        /// </summary>
+        public static string BuildArchiveMessageId(ArchivedEmail email)
+        {
+            var original = string.IsNullOrEmpty(email.MessageId)
+                ? $"no-id-{email.Id}"
+                : email.MessageId.Trim('<', '>').Replace("@", ".");
+            return $"{original}.archive-{email.MailAccountId}-{email.Id}@archive.local";
         }
 
         /// <summary>
@@ -129,7 +149,7 @@ namespace MailArchiver.Services.ImapServer
             var to = BuildAddressList(email.To);
             var cc = BuildAddressList(email.Cc);
             var bcc = BuildAddressList(email.Bcc);
-            var msgId = EncodeNilOrString(string.IsNullOrEmpty(email.MessageId) ? null : $"<{email.MessageId.Trim('<', '>')}>");
+            var msgId = EncodeNilOrString($"<{BuildArchiveMessageId(email)}>");
 
             // sender and reply-to default to from; in-reply-to is NIL
             return $"({date} {subject} {from} {from} {from} {to} {cc} {bcc} NIL {msgId})";

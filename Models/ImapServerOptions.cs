@@ -42,5 +42,14 @@ namespace MailArchiver.Models
 
         /// <summary>Path where the auto-generated server PFX is exported so the SMTP service can share it.</summary>
         public string ServerCertExportPath { get; set; } = "/app/certs/mailarchiver-server.pfx";
+
+        /// <summary>
+        /// Additional SAN entries (DNS names or IP addresses) to embed in the auto-generated server certificate.
+        /// The server always adds localhost/127.0.0.1/::1 and every non-loopback IPv4 address found on local interfaces.
+        /// Set additional entries here (e.g. a Tailscale IP, a LAN IP, a .local name) so Apple Mail and other clients
+        /// can verify the cert no matter which address they connect to.
+        /// Override per-entry via env: ImapServer__SubjectAlternativeNames__0=100.64.1.2
+        /// </summary>
+        public List<string> SubjectAlternativeNames { get; set; } = new();
     }
 }

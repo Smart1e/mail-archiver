@@ -1,0 +1,67 @@
+services:
+  mailarchive-app:
+    image: ghcr.io/smart1e/mail-archiver:latest
+    restart: always
+    environment:
+      # Database Connection
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=MailArchiver;Username=mailuser;Password=iskhocuyXwaqfTKp;
+      # Authentication Settings
+      - Authentication__Username=admin
+      - Authentication__Password=MD-9kXb!C3-ML8ba
+      # TimeZone Settings
+      - TimeZone__DisplayTimeZoneId=Europe/London
+      # Reverse proxy support
+      - ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
+      - ASPNETCORE_URLS=http://+:5000
+      - ASPNETCORE_ENVIRONMENT=Development
+      # Built-in IMAP server
+      - ImapServer__Enabled=true
+      - ImapServer__Port=143
+      - ImapServer__ImapsPort=993
+      - ImapServer__SmtpPort=25
+      - ImapServer__SmtpsPort=465
+      - ImapServer__CaCertExportPath=/app/certs/mailarchiver-ca.cer
+    ports:
+      - "143:143"
+      - "993:993"
+      - "465:465"
+      - "25:25"
+      - "5001:5000"
+    networks:
+      - postgres
+      - internal
+    volumes:
+      - ./data-protection-keys:/app/DataProtection-Keys
+      - ./certs:/app/certs
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel --no-autoupdate run --token eyJhIjoiZDY1ZmU2OGZlM2U2Zjc5NjMyZDIyOTU0ZGZmMjc1NTEiLCJ0IjoiMjM0N2E1ZDMtNzM5My00MzFiLWIxMDYtNzlhY2Y4ZDcyOTgwIiwicyI6IlltSmtNelUyTVRNdE5tWXpaUzAwWmpGaUxUa3dZVEV0TURSallUZ3pZemt3WXpFeiJ9
+    networks:
+      - internal
+
+  postgres:
+    image: postgres:17-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: MailArchiver
+      POSTGRES_USER: mailuser
+      POSTGRES_PASSWORD: iskhocuyXwaqfTKp
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+    networks:
+      - postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailuser -d MailArchiver"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  postgres:
+  internal:
