@@ -201,18 +201,24 @@ namespace MailArchiver.Services.ImapServer
                 else
                     paramStr = "NIL";
 
-                // Get size
+                // RFC 3501 §7.4.2: BODYSTRUCTURE "size" is the octet count as transmitted — the
+                // ENCODED size, not the decoded one. The FETCH BODY[N] path returns encoded bytes,
+                // so advertising the decoded length here makes the two disagree and Apple Mail
+                // won't render the body.
                 long size = 0;
                 int lines = 0;
                 if (part.Content != null)
                 {
-                    using var ms = new MemoryStream();
-                    part.Content.DecodeTo(ms);
-                    size = ms.Length;
+                    using (var encoded = new MemoryStream())
+                    {
+                        part.Content.WriteTo(encoded);
+                        size = encoded.Length;
+                    }
                     if (type == "TEXT")
                     {
-                        ms.Position = 0;
-                        var text = Encoding.UTF8.GetString(ms.ToArray());
+                        using var decoded = new MemoryStream();
+                        part.Content.DecodeTo(decoded);
+                        var text = Encoding.UTF8.GetString(decoded.ToArray());
                         lines = text.Count(c => c == '\n') + 1;
                     }
                 }
@@ -245,8 +251,11 @@ namespace MailArchiver.Services.ImapServer
 
         private static string FormatEnvelopeDate(DateTime dt)
         {
-            // RFC 2822 date format for ENVELOPE
-            return $"\"{dt.ToString("ddd, dd MMM yyyy HH:mm:ss +0000", System.Globalization.CultureInfo.InvariantCulture)}\"";
+            // RFC 2822 date format for ENVELOPE. Treat Unspecified (Postgres default) as UTC so the
+            // serialized value is stable across sessions; any drift would let Apple Mail see changed
+            // metadata and re-fetch bodies.
+            var utc = dt.Kind == DateTimeKind.Utc ? dt : DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+            return $"\"{utc.ToString("ddd, dd MMM yyyy HH:mm:ss +0000", System.Globalization.CultureInfo.InvariantCulture)}\"";
         }
 
         private static string EncodeNilOrString(string? value)

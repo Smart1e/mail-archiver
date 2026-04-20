@@ -332,6 +332,7 @@ namespace MailArchiver.Services.ImapServer
                     // Read-only mailbox: acknowledge silently. Returning NO caused Apple Mail to
                     // treat every sync as a failure and repeatedly re-download all messages.
                     // The client's local flag state wins; we never persist changes.
+                    _logger.LogDebug("STORE silent-OK folder={Folder} args={Args}", _selectedFolder ?? "<none>", args);
                     await writer.WriteLineAsync($"{tag} OK STORE completed");
                     break;
 
@@ -610,6 +611,7 @@ namespace MailArchiver.Services.ImapServer
                     await HandleSearchAsync(tag, subArgs, isUid: true, writer, db, ct);
                     break;
                 case "STORE":
+                    _logger.LogDebug("UID STORE silent-OK folder={Folder} args={Args}", _selectedFolder ?? "<none>", subArgs);
                     await writer.WriteLineAsync($"{tag} OK UID STORE completed");
                     break;
                 case "COPY":
@@ -767,6 +769,8 @@ namespace MailArchiver.Services.ImapServer
             var setStr = args.Substring(0, spaceIdx);
             var itemsStr = args.Substring(spaceIdx + 1).Trim();
 
+            _logger.LogDebug("FETCH request isUid={IsUid} set={Set} items={Items}", isUid, setStr, itemsStr);
+
             var indices = ExpandMessageSet(setStr, isUid);
 
             foreach (var idx in indices)
@@ -810,31 +814,35 @@ namespace MailArchiver.Services.ImapServer
             StreamWriter writer, CancellationToken ct)
         {
             var items = ParseFetchItems(itemsStr);
-            var nonLiteralParts = new List<string>();
-            byte[]? literalBytes = null;
-            string? literalItemName = null;
+
+            // Each part is either a plain string segment (no literal) OR a literal (item name + bytes).
+            // We emit them in request order so clients that send multiple literals per FETCH
+            // (Apple Mail pairs BODY.PEEK[HEADER.FIELDS ...] with BODY.PEEK[TEXT]) get every item back.
+            var parts = new List<(string? plain, string? literalName, byte[]? literalBytes)>();
+            int literalCount = 0;
 
             foreach (var item in items)
             {
                 var upper = item.ToUpperInvariant();
 
                 if (upper == "UID")
-                    nonLiteralParts.Add($"UID {email.Id}");
+                    parts.Add(($"UID {email.Id}", null, null));
                 else if (upper == "FLAGS")
-                    nonLiteralParts.Add(@"FLAGS (\Seen)");
+                    parts.Add((@"FLAGS (\Seen)", null, null));
                 else if (upper == "INTERNALDATE")
-                    nonLiteralParts.Add($"INTERNALDATE \"{email.ReceivedDate.ToString("dd-MMM-yyyy HH:mm:ss +0000", System.Globalization.CultureInfo.InvariantCulture)}\"");
+                    parts.Add(($"INTERNALDATE \"{FormatInternalDate(email.ReceivedDate)}\"", null, null));
                 else if (upper == "RFC822.SIZE")
-                    nonLiteralParts.Add($"RFC822.SIZE {ImapMessageBuilder.GetMessageSize(email)}");
+                    parts.Add(($"RFC822.SIZE {ImapMessageBuilder.GetMessageSize(email)}", null, null));
                 else if (upper == "ENVELOPE")
-                    nonLiteralParts.Add($"ENVELOPE {ImapMessageBuilder.BuildEnvelope(email)}");
+                    parts.Add(($"ENVELOPE {ImapMessageBuilder.BuildEnvelope(email)}", null, null));
                 else if (upper == "BODYSTRUCTURE" || upper == "BODY")
-                    nonLiteralParts.Add($"{upper} {ImapMessageBuilder.BuildBodyStructure(email)}");
+                    parts.Add(($"{upper} {ImapMessageBuilder.BuildBodyStructure(email)}", null, null));
                 else if (upper == "RFC822" || upper == "BODY[]" || upper == "BODY.PEEK[]")
                 {
                     var msg = ImapMessageBuilder.BuildMessage(email);
-                    literalBytes = ImapMessageBuilder.SerializeMessage(msg);
-                    literalItemName = upper == "RFC822" ? "RFC822" : "BODY[]";
+                    var bytes = ImapMessageBuilder.SerializeMessage(msg);
+                    parts.Add((null, upper == "RFC822" ? "RFC822" : "BODY[]", bytes));
+                    literalCount++;
                 }
                 else if (upper.StartsWith("BODY[HEADER") || upper.StartsWith("BODY.PEEK[HEADER"))
                 {
@@ -847,7 +855,6 @@ namespace MailArchiver.Services.ImapServer
                     var sectionUpper = section.ToUpperInvariant();
 
                     using var ms = new MemoryStream();
-                    var isPeek = upper.StartsWith("BODY.PEEK[");
 
                     if (sectionUpper.StartsWith("HEADER.FIELDS.NOT"))
                     {
@@ -889,10 +896,10 @@ namespace MailArchiver.Services.ImapServer
                         ms.Write(Encoding.UTF8.GetBytes("\r\n"), 0, 2);
                     }
 
-                    literalBytes = ms.ToArray();
                     // Preserve the exact section string the client requested so the response matches
                     // (Apple Mail matches the item name in the reply against the one it sent).
-                    literalItemName = $"BODY[{section}]";
+                    parts.Add((null, $"BODY[{section}]", ms.ToArray()));
+                    literalCount++;
                 }
                 else if (upper.StartsWith("BODY[TEXT") || upper.StartsWith("BODY.PEEK[TEXT"))
                 {
@@ -901,10 +908,11 @@ namespace MailArchiver.Services.ImapServer
                     var fullStr = Encoding.UTF8.GetString(fullBytes);
                     // TEXT is everything after the first blank line (header/body separator)
                     var sepIdx = fullStr.IndexOf("\r\n\r\n");
-                    literalBytes = sepIdx >= 0
+                    var textBytes = sepIdx >= 0
                         ? Encoding.UTF8.GetBytes(fullStr.Substring(sepIdx + 4))
                         : Encoding.UTF8.GetBytes(fullStr);
-                    literalItemName = "BODY[TEXT]";
+                    parts.Add((null, "BODY[TEXT]", textBytes));
+                    literalCount++;
                 }
                 else if (upper.StartsWith("BODY[") || upper.StartsWith("BODY.PEEK["))
                 {
@@ -917,72 +925,93 @@ namespace MailArchiver.Services.ImapServer
                         var section = upper.Substring(openBracket + 1, closeBracket - openBracket - 1);
                         var msg = ImapMessageBuilder.BuildMessage(email);
 
+                        byte[] partBytes;
                         if (string.IsNullOrEmpty(section))
                         {
-                            // BODY[] — full message (already handled above, but just in case)
-                            literalBytes = ImapMessageBuilder.SerializeMessage(msg);
-                            literalItemName = "BODY[]";
+                            partBytes = ImapMessageBuilder.SerializeMessage(msg);
                         }
                         else
                         {
                             // Try to resolve MIME part by section number (e.g. "1", "1.1", "2")
-                            var part = ResolveMimePart(msg.Body, section);
-                            if (part != null)
+                            var partMime = ResolveMimePart(msg.Body, section);
+                            if (partMime != null)
                             {
                                 using var ms = new MemoryStream();
                                 if (section.EndsWith(".MIME"))
                                 {
                                     // BODY[N.MIME] — return only the MIME headers of the part
-                                    part.Headers.WriteTo(ms);
+                                    partMime.Headers.WriteTo(ms);
                                     ms.Write(Encoding.UTF8.GetBytes("\r\n"));
                                 }
-                                else if (part is MimeKit.MimePart mimePart && mimePart.Content != null)
+                                else if (partMime is MimeKit.MimePart mimePart && mimePart.Content != null)
                                 {
                                     // BODY[N] for a leaf part — return only the encoded content,
                                     // NOT the MIME headers. Apple Mail expects raw content here.
                                     mimePart.Content.WriteTo(ms);
                                 }
-                                else if (part is MimeKit.Multipart)
+                                else if (partMime is MimeKit.Multipart)
                                 {
                                     // BODY[N] for a multipart — write the full multipart body
-                                    part.WriteTo(ms);
+                                    partMime.WriteTo(ms);
                                 }
                                 else
                                 {
-                                    // Fallback
-                                    part.WriteTo(ms);
+                                    partMime.WriteTo(ms);
                                 }
-                                literalBytes = ms.ToArray();
+                                partBytes = ms.ToArray();
                             }
                             else
                             {
-                                literalBytes = Array.Empty<byte>();
+                                partBytes = Array.Empty<byte>();
                             }
-                            var isPeek = upper.StartsWith("BODY.PEEK[");
-                            literalItemName = isPeek
-                                ? $"BODY[{item.Substring(item.IndexOf('[') + 1)}"
-                                : $"BODY[{item.Substring(item.IndexOf('[') + 1)}";
                         }
+                        parts.Add((null, $"BODY[{item.Substring(item.IndexOf('[') + 1)}", partBytes));
+                        literalCount++;
                     }
                 }
             }
 
+            // Drain any buffered writer text so it lands before our raw bytes.
+            // StreamWriter has AutoFlush=false, so text from prior responses in the same batch
+            // could otherwise overtake the binary that follows.
+            await writer.FlushAsync(ct);
             var stream = writer.BaseStream;
 
-            if (literalBytes != null && literalItemName != null)
+            var prefix = $"* {msn} FETCH (";
+            await stream.WriteAsync(Encoding.UTF8.GetBytes(prefix), ct);
+
+            for (int i = 0; i < parts.Count; i++)
             {
-                // RFC 3501 literal response: "* N FETCH (items ITEMNAME {size}\r\nBYTES\r\n)\r\n"
-                var sep = nonLiteralParts.Count > 0 ? " " : "";
-                var prefix = $"* {msn} FETCH ({string.Join(" ", nonLiteralParts)}{sep}{literalItemName} {{{literalBytes.Length}}}\r\n";
-                await stream.WriteAsync(Encoding.UTF8.GetBytes(prefix), ct);
-                await stream.WriteAsync(literalBytes, ct);
-                await stream.WriteAsync(Encoding.UTF8.GetBytes(")\r\n"), ct);
-                await stream.FlushAsync(ct);
+                if (i > 0)
+                    await stream.WriteAsync(Encoding.UTF8.GetBytes(" "), ct);
+                var p = parts[i];
+                if (p.plain != null)
+                {
+                    await stream.WriteAsync(Encoding.UTF8.GetBytes(p.plain), ct);
+                }
+                else
+                {
+                    var head = Encoding.UTF8.GetBytes($"{p.literalName} {{{p.literalBytes!.Length}}}\r\n");
+                    await stream.WriteAsync(head, ct);
+                    await stream.WriteAsync(p.literalBytes, ct);
+                }
             }
-            else
-            {
-                await writer.WriteLineAsync($"* {msn} FETCH ({string.Join(" ", nonLiteralParts)})");
-            }
+            await stream.WriteAsync(Encoding.UTF8.GetBytes(")\r\n"), ct);
+            await stream.FlushAsync(ct);
+
+            _logger.LogDebug("FETCH reply msn={Msn} uid={Uid} parts={Parts} literals={Literals}",
+                msn, email.Id, parts.Count, literalCount);
+        }
+
+        /// <summary>
+        /// Formats a DateTime as an IMAP INTERNALDATE string in UTC. The DB returns DateTimeKind.Unspecified;
+        /// treat that as UTC so the rendered date never drifts across midnight between sessions (Apple Mail
+        /// treats a changing INTERNALDATE as changed metadata and may re-fetch).
+        /// </summary>
+        private static string FormatInternalDate(DateTime dt)
+        {
+            var utc = dt.Kind == DateTimeKind.Utc ? dt : DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+            return utc.ToString("dd-MMM-yyyy HH:mm:ss +0000", System.Globalization.CultureInfo.InvariantCulture);
         }
 
         // -----------------------------------------------------------------------
@@ -1212,6 +1241,7 @@ namespace MailArchiver.Services.ImapServer
         /// </summary>
         private async Task HandleIdleAsync(string tag, StreamReader reader, StreamWriter writer, CancellationToken ct)
         {
+            _logger.LogInformation("IDLE entered folder={Folder}", _selectedFolder ?? "<none>");
             await writer.WriteLineAsync("+ idling");
             await writer.FlushAsync(ct);
 
@@ -1223,10 +1253,15 @@ namespace MailArchiver.Services.ImapServer
                 while (!idleCts.IsCancellationRequested)
                 {
                     var line = await reader.ReadLineAsync(idleCts.Token);
-                    if (line == null) return; // client disconnected
+                    if (line == null)
+                    {
+                        _logger.LogInformation("IDLE exited reason=client-disconnect folder={Folder}", _selectedFolder ?? "<none>");
+                        return;
+                    }
                     if (line.Trim().Equals("DONE", StringComparison.OrdinalIgnoreCase))
                     {
                         await writer.WriteLineAsync($"{tag} OK IDLE terminated");
+                        _logger.LogInformation("IDLE exited reason=done folder={Folder}", _selectedFolder ?? "<none>");
                         return;
                     }
                     // Ignore any other input during IDLE (client shouldn't send anything else).
@@ -1234,6 +1269,7 @@ namespace MailArchiver.Services.ImapServer
 
                 // 29-minute window expired — close the IDLE gracefully so the client reconnects.
                 await writer.WriteLineAsync($"{tag} OK IDLE terminated by server timeout");
+                _logger.LogInformation("IDLE exited reason=timeout folder={Folder}", _selectedFolder ?? "<none>");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -1242,6 +1278,7 @@ namespace MailArchiver.Services.ImapServer
             catch (OperationCanceledException)
             {
                 await writer.WriteLineAsync($"{tag} OK IDLE terminated by server timeout");
+                _logger.LogInformation("IDLE exited reason=timeout folder={Folder}", _selectedFolder ?? "<none>");
             }
         }
     }
