@@ -892,7 +892,7 @@ namespace MailArchiver.Services.ImapServer
                     else
                     {
                         // Plain BODY[HEADER] — full headers
-                        msg.Headers.WriteTo(ms);
+                        msg.Headers.WriteTo(ImapMessageBuilder.CrlfFormat, ms);
                         ms.Write(Encoding.UTF8.GetBytes("\r\n"), 0, 2);
                     }
 
@@ -940,7 +940,7 @@ namespace MailArchiver.Services.ImapServer
                                 if (section.EndsWith(".MIME"))
                                 {
                                     // BODY[N.MIME] — return only the MIME headers of the part
-                                    partMime.Headers.WriteTo(ms);
+                                    partMime.Headers.WriteTo(ImapMessageBuilder.CrlfFormat, ms);
                                     ms.Write(Encoding.UTF8.GetBytes("\r\n"));
                                 }
                                 else if (partMime is MimeKit.MimePart mimePart && mimePart.Content != null)
@@ -952,11 +952,11 @@ namespace MailArchiver.Services.ImapServer
                                 else if (partMime is MimeKit.Multipart)
                                 {
                                     // BODY[N] for a multipart — write the full multipart body
-                                    partMime.WriteTo(ms);
+                                    partMime.WriteTo(ImapMessageBuilder.CrlfFormat, ms);
                                 }
                                 else
                                 {
-                                    partMime.WriteTo(ms);
+                                    partMime.WriteTo(ImapMessageBuilder.CrlfFormat, ms);
                                 }
                                 partBytes = ms.ToArray();
                             }

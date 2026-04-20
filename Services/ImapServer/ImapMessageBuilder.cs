@@ -12,6 +12,21 @@ namespace MailArchiver.Services.ImapServer
     public static class ImapMessageBuilder
     {
         /// <summary>
+        /// CRLF-normalised FormatOptions. MimeKit defaults to the host OS newline, which is LF on
+        /// Linux. IMAP is strictly CRLF, and the BODY[TEXT] path finds the header/body boundary by
+        /// searching for "\r\n\r\n" — LF-only output makes that search miss and the entire message
+        /// (headers included) gets returned as the body, which Apple Mail can't render.
+        /// </summary>
+        public static readonly FormatOptions CrlfFormat = CreateCrlfFormat();
+
+        private static FormatOptions CreateCrlfFormat()
+        {
+            var fmt = FormatOptions.Default.Clone();
+            fmt.NewLineFormat = NewLineFormat.Dos;
+            return fmt;
+        }
+
+        /// <summary>
         /// Builds a MimeMessage from an ArchivedEmail record using stored fields and attachments.
         /// </summary>
         public static MimeMessage BuildMessage(ArchivedEmail email)
@@ -104,7 +119,7 @@ namespace MailArchiver.Services.ImapServer
         public static byte[] SerializeMessage(MimeMessage message)
         {
             using var ms = new MemoryStream();
-            message.WriteTo(ms);
+            message.WriteTo(CrlfFormat, ms);
             return ms.ToArray();
         }
 
