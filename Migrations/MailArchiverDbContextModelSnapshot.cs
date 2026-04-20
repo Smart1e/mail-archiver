@@ -31,6 +31,9 @@ namespace MailArchiver.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<string?>("ArchiveImapUsername")
+                        .HasColumnType("text");
+
                     b.Property<string>("ClientId")
                         .HasColumnType("text");
 

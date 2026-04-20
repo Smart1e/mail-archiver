@@ -180,13 +180,25 @@
                         <div class="form-text">@Localizer["ImapServerPasswordText"]</div>
                         <span asp-validation-for="ImapPassword" class="text-danger"></span>
                     </div>
+                    <div class="mb-3">
+                        <label asp-for="ArchiveImapUsername" class="form-label">Archive IMAP Login Address</label>
+                        <input asp-for="ArchiveImapUsername" class="form-control" type="text" placeholder="Leave empty to use the Email Address above" autocomplete="off" />
+                        <div class="form-text">
+                            Optional override for the address clients use to log in to the built-in IMAP server.
+                            Useful if you want to connect from Apple Mail without it clashing with your live account —
+                            set to something like <code>sales@archive.local</code>. Does not affect the upstream sync
+                            (which uses Email Address / Username above). The <code>archive-</code> prefix is still
+                            accepted for backward compatibility.
+                        </div>
+                        <span asp-validation-for="ArchiveImapUsername" class="text-danger"></span>
+                    </div>
                     @if (Model.Id > 0)
                     {
                         <div class="alert alert-info">
                             <strong>@Localizer["ImapServerConnectionDetails"]</strong><br />
                             @Localizer["ImapServerHost"]: <code>@Context.Request.Host.Host</code><br />
                             @Localizer["ImapServerPortLabel"]: <code>@(ViewBag.ImapServerPort ?? 143)</code><br />
-                            @Localizer["ImapServerUsernameLabel"]: <code>@Model.EmailAddress</code>
+                            @Localizer["ImapServerUsernameLabel"]: <code>@(string.IsNullOrWhiteSpace(Model.ArchiveImapUsername) ? Model.EmailAddress : Model.ArchiveImapUsername)</code>
                         </div>
                     }
                 </div>

@@ -229,6 +229,9 @@ var model = new MailAccountViewModel
                     DeleteAfterDays = model.DeleteAfterDays,
                     LocalRetentionDays = model.LocalRetentionDays,
                     MinEmailAgeDays = model.MinEmailAgeDays,
+                    ArchiveImapUsername = string.IsNullOrWhiteSpace(model.ArchiveImapUsername)
+                        ? null
+                        : model.ArchiveImapUsername.Trim(),
                     LastSync = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)
                 };
 
@@ -344,6 +347,7 @@ var model = new MailAccountViewModel
                 LocalRetentionDays = account.LocalRetentionDays,
                 MinEmailAgeDays = account.MinEmailAgeDays,
                 // Note: ImapPassword intentionally not round-tripped to UI (like Password)
+                ArchiveImapUsername = account.ArchiveImapUsername,
                 Provider = account.Provider,
                 ClientId = account.ClientId,
                 ClientSecret = account.ClientSecret,
@@ -477,6 +481,12 @@ var model = new MailAccountViewModel
                     {
                         account.ImapPassword = model.ImapPassword;
                     }
+
+                    // Archive IMAP login override — empty string clears the override, reverting
+                    // to EmailAddress. Trim whitespace so an accidental space doesn't break login.
+                    account.ArchiveImapUsername = string.IsNullOrWhiteSpace(model.ArchiveImapUsername)
+                        ? null
+                        : model.ArchiveImapUsername.Trim();
 
                     // Validate local retention policy
                     if (account.LocalRetentionDays.HasValue && !account.DeleteAfterDays.HasValue)

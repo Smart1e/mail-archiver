@@ -373,8 +373,12 @@ namespace MailArchiver.Services.ImapServer
             if (lookupUser.StartsWith("archive-", StringComparison.OrdinalIgnoreCase))
                 lookupUser = lookupUser.Substring(8);
 
+            // Match against ArchiveImapUsername (if set) OR EmailAddress. Clients can now
+            // expose the archive under a different address than the real sync account.
             var account = await db.MailAccounts
-                .FirstOrDefaultAsync(a => a.EmailAddress == lookupUser && a.ImapPassword != null && a.ImapPassword == pass, ct);
+                .FirstOrDefaultAsync(a =>
+                    (a.ArchiveImapUsername == lookupUser || a.EmailAddress == lookupUser)
+                    && a.ImapPassword != null && a.ImapPassword == pass, ct);
 
             if (account == null)
             {
@@ -464,8 +468,11 @@ namespace MailArchiver.Services.ImapServer
             if (lookupUser.StartsWith("archive-", StringComparison.OrdinalIgnoreCase))
                 lookupUser = lookupUser.Substring(8);
 
+            // Match against ArchiveImapUsername (if set) OR EmailAddress.
             var account = await db.MailAccounts
-                .FirstOrDefaultAsync(a => a.EmailAddress == lookupUser && a.ImapPassword != null && a.ImapPassword == pass, ct);
+                .FirstOrDefaultAsync(a =>
+                    (a.ArchiveImapUsername == lookupUser || a.EmailAddress == lookupUser)
+                    && a.ImapPassword != null && a.ImapPassword == pass, ct);
 
             if (account == null)
             {

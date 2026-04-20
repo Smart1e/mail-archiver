@@ -55,6 +55,9 @@ namespace MailArchiver.Models.ViewModels
         [Display(Name = "IMAP Server Password")]
         public string? ImapPassword { get; set; }
 
+        [Display(Name = "Archive IMAP Login Address")]
+        public string? ArchiveImapUsername { get; set; }
+
         [Display(Name = "Provider")]
         public ProviderType Provider { get; set; } = ProviderType.IMAP;
         

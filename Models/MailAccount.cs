@@ -30,6 +30,14 @@ public class MailAccount
     // Password for built-in IMAP server access (null = IMAP access disabled for this account)
     public string? ImapPassword { get; set; }
 
+    // Username for built-in IMAP server access. When set, clients must log in using this
+    // value instead of EmailAddress — lets you expose the archive under a different address
+    // (e.g. sales@archive.local) without disturbing EmailAddress / Username used for real
+    // upstream sync. The "archive-" prefix-strip still applies, so clients can log in as
+    // either "archive-sales@archive.local" or "sales@archive.local". When null, the server
+    // matches on EmailAddress (original behaviour).
+    public string? ArchiveImapUsername { get; set; }
+
     // Provider field for account type
     public ProviderType Provider { get; set; } = ProviderType.IMAP;
     
