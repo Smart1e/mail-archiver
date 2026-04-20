@@ -90,15 +90,24 @@ namespace MailArchiver.Services.ImapServer
                             (string?)null,
                             X509KeyStorageFlags.EphemeralKeySet);
 
-                        if (CertificateCoversSans(existing, desiredSans))
-                        {
-                            tlsCertificate = existing;
-                            _logger.LogInformation("Loaded existing server certificate from {Path} (SAN set matches current config)", serverPfxPath);
-                        }
-                        else
+                        // Regenerate if SANs drifted, OR the leaf is within 30 days of
+                        // expiry (server leaf is capped at 395 days to satisfy Apple's
+                        // 398-day maximum — so we have to roll it over annually).
+                        var expiresSoon = existing.NotAfter - DateTime.UtcNow < TimeSpan.FromDays(30);
+                        if (!CertificateCoversSans(existing, desiredSans))
                         {
                             existing.Dispose();
                             _logger.LogInformation("Existing server cert SAN set does not cover current config — will regenerate");
+                        }
+                        else if (expiresSoon)
+                        {
+                            existing.Dispose();
+                            _logger.LogInformation("Existing server cert expires {Expiry:u} (<30 days) — will regenerate", existing.NotAfter);
+                        }
+                        else
+                        {
+                            tlsCertificate = existing;
+                            _logger.LogInformation("Loaded existing server certificate from {Path} (SAN set OK, expires {Expiry:u})", serverPfxPath, existing.NotAfter);
                         }
                     }
                     catch (Exception ex)
@@ -385,10 +394,16 @@ namespace MailArchiver.Services.ImapServer
             using (var rng = RandomNumberGenerator.Create())
                 rng.GetBytes(serialNumber);
 
+            // Apple enforces a 398-day maximum validity on TLS server leaf certs
+            // (macOS 10.15+, iOS 13+) even when the chain terminates at a user-installed
+            // self-signed root. A longer-lived cert passes openssl's handshake but is
+            // silently rejected by the system trust evaluator, which makes profile
+            // installs and Apple Mail account verification fail with "timed out".
+            // Keep CA at 10 years (roots are exempt) and cap the leaf at 395 days.
             var serverCertPub = serverRequest.Create(
                 caCert,
                 DateTimeOffset.UtcNow.AddDays(-1),
-                DateTimeOffset.UtcNow.AddYears(10),
+                DateTimeOffset.UtcNow.AddDays(395),
                 serialNumber);
 
             // Combine public cert with private key
@@ -398,7 +413,7 @@ namespace MailArchiver.Services.ImapServer
                 (string?)null,
                 X509KeyStorageFlags.EphemeralKeySet);
 
-            _logger.LogInformation("Generated CA + server certificate for TLS (valid 10 years)");
+            _logger.LogInformation("Generated CA (10-year) and server leaf cert (395-day) for TLS");
 
             return (new X509Certificate2(caCert.Export(X509ContentType.Cert)), exportable);
         }
