@@ -69,6 +69,13 @@
                         <input asp-for="UseSSL" class="form-check-input" />
                         <label asp-for="UseSSL" class="form-check-label">@Localizer["UseSSL"]</label>
                     </div>
+
+                    <div class="mb-3">
+                        <label asp-for="ArchiveImapUsername" class="form-label">Archive IMAP Login Address</label>
+                        <input asp-for="ArchiveImapUsername" class="form-control" placeholder="e.g. sales@archive.local" />
+                        <div class="form-text">Optional. Separate login address used only when connecting Apple Mail (or another client) to this server's built-in IMAP archive. Leave blank to use the account's email address.</div>
+                        <span asp-validation-for="ArchiveImapUsername" class="text-danger"></span>
+                    </div>
                 </div>
                 
                 <div id="microsoft365Settings" style="display: none;">

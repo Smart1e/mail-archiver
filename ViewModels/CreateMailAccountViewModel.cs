@@ -64,5 +64,8 @@ namespace MailArchiver.Models.ViewModels
         [Display(Name = "Minimum Email Age (Days)")]
         [Range(1, int.MaxValue, ErrorMessage = "Minimum email age must be at least 1")]
         public int? MinEmailAgeDays { get; set; }
+
+        [Display(Name = "Archive IMAP Login Address")]
+        public string? ArchiveImapUsername { get; set; }
     }
 }
