@@ -1,0 +1,14 @@
+# Dovecot SQL passdb pointed at the MailArchiver Postgres. Returns the numeric MailAccount.Id
+# as the Dovecot username so the Maildir root stays rename-safe — users log in with their email
+# address (or ArchiveImapUsername override, same convention the custom IMAP server used).
+
+driver = pgsql
+connect = host=postgres dbname=MailArchiver user=mailuser password=%{env:POSTGRES_PASSWORD}
+default_pass_scheme = PLAIN
+
+password_query = \
+  SELECT "Id"::text AS "user", "ImapPassword" AS "password" \
+  FROM mail_archiver."MailAccounts" \
+  WHERE "IsEnabled" = true \
+    AND "ImapPassword" IS NOT NULL \
+    AND LOWER(COALESCE("ArchiveImapUsername", "EmailAddress")) = LOWER(regexp_replace('%Lu', '^archive-', ''))

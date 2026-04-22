@@ -1,0 +1,8 @@
+# Global ACL applied to every mailbox. Mailbox owners get exactly:
+#   lookup      — mailbox visible in LIST
+#   read        — SELECT/FETCH
+#   write-seen  — persist \Seen flag in Dovecot's per-user index
+# No insert/expunge/write — all other flag changes and APPEND/COPY are rejected. Apple Mail
+# silently tolerates this for a read-only account.
+
+* owner lookup read write-seen

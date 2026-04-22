@@ -1,3 +1,6 @@
+volumes:
+  maildir-data:
+
 services:
   mailarchive-app:
     image: ghcr.io/smart1e/mail-archiver:latest
@@ -14,18 +17,17 @@ services:
       - ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
       - ASPNETCORE_URLS=http://+:5000
       - ASPNETCORE_ENVIRONMENT=Development
-      # Built-in IMAP server
+      # IMAP listener disabled — Dovecot owns 143/993 now. Keep Enabled=true + Port=0 so the
+      # cert-generation path still runs and writes server.crt/server.key for Dovecot to read.
       - ImapServer__Enabled=true
-      - ImapServer__Port=143
-      - ImapServer__ImapsPort=993
-      - ImapServer__SmtpPort=25
-      - ImapServer__SmtpsPort=465
+      - ImapServer__Port=0
+      - ImapServer__ImapsPort=0
+      - ImapServer__SmtpEnabled=false
       - ImapServer__CaCertExportPath=/app/certs/mailarchiver-ca.cer
+      - ImapServer__ServerCertExportPath=/app/certs/mailarchiver-server.pfx
+      - Maildir__Root=/var/mail
+      - Maildir__Enabled=true
     ports:
-      - "143:143"
-      - "993:993"
-      - "465:465"
-      - "25:25"
       - "5001:5000"
     networks:
       - postgres
@@ -33,9 +35,30 @@ services:
     volumes:
       - ./data-protection-keys:/app/DataProtection-Keys
       - ./certs:/app/certs
+      - maildir-data:/var/mail
     depends_on:
       postgres:
         condition: service_healthy
+
+  dovecot:
+    image: dovecot/dovecot:latest
+    restart: always
+    environment:
+      - POSTGRES_PASSWORD=iskhocuyXwaqfTKp
+    ports:
+      - "143:143"
+      - "993:993"
+    volumes:
+      - ./dovecot-config:/etc/dovecot:ro
+      - ./certs:/etc/dovecot/certs:ro
+      - maildir-data:/var/mail
+    networks:
+      - postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailarchive-app:
+        condition: service_started
 
   cloudflared:
     image: cloudflare/cloudflared:latest

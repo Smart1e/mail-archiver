@@ -121,6 +121,10 @@ builder.Services.Configure<MailSyncOptions>(
 builder.Services.Configure<MailArchiver.Models.ImapServerOptions>(
     builder.Configuration.GetSection(MailArchiver.Models.ImapServerOptions.ImapServer));
 
+// Add Maildir Export Options (Dovecot-facing sync)
+builder.Services.Configure<MailArchiver.Models.MaildirOptions>(
+    builder.Configuration.GetSection(MailArchiver.Models.MaildirOptions.Maildir));
+
 // Add Upload Options
 builder.Services.Configure<UploadOptions>(
     builder.Configuration.GetSection(UploadOptions.Upload));
@@ -336,9 +340,16 @@ builder.Services.AddHostedService<EmailDeletionService>(provider => provider.Get
 
 builder.Services.AddHostedService<MailSyncBackgroundService>();
 
-// Register built-in IMAP server and fake SMTP server
+// Register built-in IMAP server and fake SMTP server. These are now gated by env vars:
+// ImapServer:Port=0 + ImapServer:ImapsPort=0 disables the listeners but keeps the cert-gen
+// path running so Dovecot can read the shared PEM files. ImapServer:SmtpEnabled=false turns
+// off the fake SMTP listener entirely.
 builder.Services.AddHostedService<MailArchiver.Services.ImapServer.ImapServerService>();
 builder.Services.AddHostedService<MailArchiver.Services.ImapServer.FakeSmtpService>();
+
+// Register the Maildir export service — writes archived emails to a Maildir tree that the
+// Dovecot container serves to IMAP clients. Gated by Maildir:Enabled.
+builder.Services.AddHostedService<MailArchiver.Services.MaildirExportService>();
 
 // Register DatabaseMaintenanceService as singleton and hosted service - MUST be the same instance
 builder.Services.AddSingleton<DatabaseMaintenanceService>();

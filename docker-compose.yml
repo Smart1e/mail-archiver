@@ -3,23 +3,27 @@ version: '3.8'
 networks:
   postgres:
 
+volumes:
+  maildir-data:
+
 services:
   mailarchive-app:
     build: .
     restart: always
     ports:
       - "5001:5000"
-      - "143:143"
-      - "993:993"
-      - "465:465"
-      - "25:25"
     environment:
+      # IMAP listener disabled (Dovecot owns 143/993). Keeping Enabled=true + Port=0 so the
+      # cert-generation path still runs on startup and writes server.crt/server.key into ./certs
+      # for Dovecot to pick up.
       - ImapServer__Enabled=true
-      - ImapServer__Port=143
-      - ImapServer__ImapsPort=993
-      - ImapServer__SmtpPort=25
-      - ImapServer__SmtpsPort=465
+      - ImapServer__Port=0
+      - ImapServer__ImapsPort=0
+      - ImapServer__SmtpEnabled=false
       - ImapServer__CaCertExportPath=/app/certs/mailarchiver-ca.cer
+      - ImapServer__ServerCertExportPath=/app/certs/mailarchiver-server.pfx
+      - Maildir__Root=/var/mail
+      - Maildir__Enabled=true
     networks:
       - postgres
     volumes:
@@ -27,8 +31,27 @@ services:
       - ./logs:/app/logs
       - ./data-protection-keys:/app/DataProtection-Keys
       - ./certs:/app/certs
+      - maildir-data:/var/mail
     depends_on:
       - postgres
+
+  dovecot:
+    image: dovecot/dovecot:latest
+    restart: always
+    ports:
+      - "143:143"
+      - "993:993"
+    environment:
+      - POSTGRES_PASSWORD=masterkey
+    volumes:
+      - ./dovecot-config:/etc/dovecot:ro
+      - ./certs:/etc/dovecot/certs:ro
+      - maildir-data:/var/mail
+    networks:
+      - postgres
+    depends_on:
+      - postgres
+      - mailarchive-app
 
   postgres:
     image: postgres:14-alpine

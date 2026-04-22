@@ -1,0 +1,13 @@
+passdb {
+  driver = sql
+  args = /etc/dovecot/dovecot-sql.conf.ext
+}
+
+# Static userdb — the home dir is derived from the account Id returned by the passdb query
+# (see dovecot-sql.conf.ext). We run mail access as root (uid=0) so the Maildir tree written
+# by the mailarchive-app container (also root) is readable without a second shared user. The
+# tree lives inside a named volume that's never exposed to the host, so this is scoped safely.
+userdb {
+  driver = static
+  args = uid=0 gid=0 home=/var/mail/%u
+}

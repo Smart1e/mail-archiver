@@ -129,6 +129,14 @@ namespace MailArchiver.Services.ImapServer
                     caCert.Dispose();
                     _logger.LogInformation("Generated and saved new CA + server certificates with SANs: {Sans}", string.Join(", ", desiredSans));
                 }
+                else
+                {
+                    // Cert was loaded from disk — make sure the PEM versions exist too. This matters
+                    // when the certs volume survived but the PEM files were removed (e.g. a mid-series
+                    // upgrade from a build that only exported PFX). Dovecot reads PEM, so the absence
+                    // of server.crt/server.key would stop it from starting.
+                    EnsureServerPemExists(tlsCertificate);
+                }
             }
 
             // ── Start listeners ────────────────────────────────────────────
@@ -455,11 +463,66 @@ namespace MailArchiver.Services.ImapServer
                 var pfxBytes = serverCert.Export(X509ContentType.Pfx);
                 File.WriteAllBytes(exportPath, pfxBytes);
                 _logger.LogInformation("Server certificate exported to {Path} for SMTP service", exportPath);
+
+                // Also export PEM-format cert + key next to the PFX. Dovecot reads PEM, and we
+                // want a single shared cert set so the whole stack presents the same identity.
+                WriteServerPem(serverCert, Path.GetDirectoryName(exportPath));
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to export server certificate to {Path}", _options.ServerCertExportPath);
             }
+        }
+
+        /// <summary>
+        /// Make sure server.crt + server.key exist next to the PFX. Called when we loaded an existing
+        /// cert from disk — covers the case where the PEM files went missing but the PFX didn't.
+        /// </summary>
+        private void EnsureServerPemExists(X509Certificate2 serverCert)
+        {
+            try
+            {
+                var certDir = Path.GetDirectoryName(_options.ServerCertExportPath);
+                if (string.IsNullOrEmpty(certDir)) return;
+                var crtPath = Path.Combine(certDir, "server.crt");
+                var keyPath = Path.Combine(certDir, "server.key");
+                if (File.Exists(crtPath) && File.Exists(keyPath)) return;
+                WriteServerPem(serverCert, certDir);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to ensure server PEM exists");
+            }
+        }
+
+        private void WriteServerPem(X509Certificate2 serverCert, string? certDir)
+        {
+            if (string.IsNullOrEmpty(certDir)) return;
+            var crtPath = Path.Combine(certDir, "server.crt");
+            var keyPath = Path.Combine(certDir, "server.key");
+
+            var crtPem = PemEncode("CERTIFICATE", serverCert.Export(X509ContentType.Cert));
+            File.WriteAllText(crtPath, crtPem);
+
+            using var rsa = serverCert.GetRSAPrivateKey();
+            if (rsa != null)
+            {
+                var keyPem = PemEncode("PRIVATE KEY", rsa.ExportPkcs8PrivateKey());
+                File.WriteAllText(keyPath, keyPem);
+                try { File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { }
+            }
+            _logger.LogInformation("Server certificate PEM + key written to {Dir} for Dovecot", certDir);
+        }
+
+        private static string PemEncode(string label, byte[] der)
+        {
+            var b64 = Convert.ToBase64String(der);
+            var sb = new System.Text.StringBuilder();
+            sb.Append("-----BEGIN ").Append(label).Append("-----\n");
+            for (int i = 0; i < b64.Length; i += 64)
+                sb.Append(b64, i, Math.Min(64, b64.Length - i)).Append('\n');
+            sb.Append("-----END ").Append(label).Append("-----\n");
+            return sb.ToString();
         }
     }
 }
