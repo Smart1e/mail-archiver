@@ -17,16 +17,30 @@ services:
       - ASPNETCORE_FORWARDEDHEADERS_ENABLED=true
       - ASPNETCORE_URLS=http://+:5000
       - ASPNETCORE_ENVIRONMENT=Development
-      # IMAP listener disabled — Dovecot owns 143/993 now. Keep Enabled=true + Port=0 so the
-      # cert-generation path still runs and writes server.crt/server.key for Dovecot to read.
+      # IMAP listener is disabled now — Dovecot owns 143/993. Keeping Enabled=true with
+      # Port=0 / ImapsPort=0 still runs the cert-generation path on startup so Dovecot
+      # can read shared server.crt / server.key / mailarchiver-ca.cer from ./certs.
       - ImapServer__Enabled=true
       - ImapServer__Port=0
       - ImapServer__ImapsPort=0
       - ImapServer__SmtpEnabled=false
       - ImapServer__CaCertExportPath=/app/certs/mailarchiver-ca.cer
       - ImapServer__ServerCertExportPath=/app/certs/mailarchiver-server.pfx
-      - Maildir__Root=/var/mail
+      # SAN entries baked into the auto-generated TLS cert.
+      # Must include every address Apple Mail will connect from — inside the
+      # container the auto-detect only sees the docker bridge IP, so the
+      # Mac mini's LAN IP and Tailscale IP have to be listed explicitly.
+      - ImapServer__SubjectAlternativeNames__0=172.16.10.106
+      - ImapServer__SubjectAlternativeNames__1=100.84.150.81
+      # Optional: add more entries as __2, __3, etc. — DNS names or IPs both work.
+      # - ImapServer__SubjectAlternativeNames__2=mail.example.com
+      # Maildir export — projects Postgres archive onto the shared volume for Dovecot.
       - Maildir__Enabled=true
+      - Maildir__Root=/var/mail
+      # Bump BatchSize for the initial bulk export; can be reduced back to 50 once caught up.
+      - Maildir__BatchSize=500
+      - Maildir__TickSeconds=10
+      - Logging__LogLevel__MailArchiver.Services=Debug
     ports:
       - "5001:5000"
     networks:
