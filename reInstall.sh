@@ -7,8 +7,8 @@ docker compose pull
 echo "Stopping containers..."
 docker compose down
 
-echo "Removing database..."
-rm -rf ./postgres-data
+# echo "Removing database..."
+# rm -rf ./postgres-data
 
 echo "Starting containers..."
 docker compose up -d
