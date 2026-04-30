@@ -111,11 +111,11 @@ namespace MailArchiver.Services
                 .ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToHashSet());
 
             var accountRoot = Path.Combine(_options.Root, accountId.ToString(), "Maildir");
-            Directory.CreateDirectory(accountRoot);
+            EnsureMaildirDirectory(accountRoot);
             // Scaffold INBOX even for empty accounts so Dovecot can SELECT INBOX successfully.
-            Directory.CreateDirectory(Path.Combine(accountRoot, "cur"));
-            Directory.CreateDirectory(Path.Combine(accountRoot, "new"));
-            Directory.CreateDirectory(Path.Combine(accountRoot, "tmp"));
+            EnsureMaildirDirectory(Path.Combine(accountRoot, "cur"));
+            EnsureMaildirDirectory(Path.Combine(accountRoot, "new"));
+            EnsureMaildirDirectory(Path.Combine(accountRoot, "tmp"));
             WriteSubscriptionsFile(accountRoot, byFolder.Keys);
 
             int materialized = 0;
@@ -132,9 +132,10 @@ namespace MailArchiver.Services
                 var newDir = Path.Combine(folderPath, "new");
                 var tmpDir = Path.Combine(folderPath, "tmp");
 
-                Directory.CreateDirectory(curDir);
-                Directory.CreateDirectory(newDir);
-                Directory.CreateDirectory(tmpDir);
+                EnsureMaildirDirectory(folderPath);
+                EnsureMaildirDirectory(curDir);
+                EnsureMaildirDirectory(newDir);
+                EnsureMaildirDirectory(tmpDir);
 
                 var existingIds = IndexExistingFiles(curDir);
                 var wanted = kv.Value;
@@ -201,9 +202,11 @@ namespace MailArchiver.Services
             var curPath = Path.Combine(curDir, filename);
 
             await File.WriteAllBytesAsync(tmpPath, bytes, ct);
+            EnsureMaildirFile(tmpPath);
             // Atomic move into cur/ — Dovecot only scans cur/ and new/, so the file is invisible until
             // the rename completes.
             File.Move(tmpPath, curPath, overwrite: false);
+            EnsureMaildirFile(curPath);
 
             if (email.CachedRfc822Size == null || email.CachedRfc822Size != bytes.Length)
             {
@@ -250,6 +253,38 @@ namespace MailArchiver.Services
 
             var path = Path.Combine(accountRoot, "subscriptions");
             File.WriteAllLines(path, subscriptions);
+            EnsureMaildirFile(path);
+        }
+
+        private static void EnsureMaildirDirectory(string path)
+        {
+            Directory.CreateDirectory(path);
+            try
+            {
+                File.SetUnixFileMode(path,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                    UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                    UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+            }
+            catch
+            {
+                // Best effort: SetUnixFileMode is only available on Unix-like filesystems.
+            }
+        }
+
+        private static void EnsureMaildirFile(string path)
+        {
+            try
+            {
+                File.SetUnixFileMode(path,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite |
+                    UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
+                    UnixFileMode.OtherRead | UnixFileMode.OtherWrite);
+            }
+            catch
+            {
+                // Best effort: SetUnixFileMode is only available on Unix-like filesystems.
+            }
         }
 
         /// <summary>
