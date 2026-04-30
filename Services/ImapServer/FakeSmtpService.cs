@@ -200,8 +200,12 @@ namespace MailArchiver.Services.ImapServer
 
             await using (stream)
             {
-                    var reader = new StreamReader(stream, Encoding.UTF8);
-                    var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
+                    var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+                    var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true)
+                    {
+                        NewLine = "\r\n",
+                        AutoFlush = true
+                    };
 
                     // SMTP greeting
                     await writer.WriteLineAsync("220 mailarchiver ESMTP Fake SMTP Ready");
@@ -232,6 +236,10 @@ namespace MailArchiver.Services.ImapServer
                         if (upper.StartsWith("EHLO") || upper.StartsWith("HELO"))
                         {
                             await writer.WriteLineAsync("250-mailarchiver Hello");
+                            if (_tlsCertificate != null && stream is not SslStream)
+                            {
+                                await writer.WriteLineAsync("250-STARTTLS");
+                            }
                             await writer.WriteLineAsync("250-AUTH PLAIN LOGIN");
                             await writer.WriteLineAsync("250-SIZE 52428800");
                             await writer.WriteLineAsync("250 OK");
@@ -297,8 +305,33 @@ namespace MailArchiver.Services.ImapServer
                         }
                         else if (upper.StartsWith("STARTTLS"))
                         {
-                            // We don't support STARTTLS on plain SMTP — use SMTPS (port 465) instead
-                            await writer.WriteLineAsync("454 4.7.0 TLS not available — use port 465 for implicit TLS");
+                            if (_tlsCertificate == null || stream is SslStream)
+                            {
+                                await writer.WriteLineAsync("454 4.7.0 TLS not available");
+                                continue;
+                            }
+
+                            await writer.WriteLineAsync("220 2.0.0 Ready to start TLS");
+                            await writer.FlushAsync(ct);
+
+                            try
+                            {
+                                var sslStream = new SslStream(stream, leaveInnerStreamOpen: false);
+                                await sslStream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                                {
+                                    ServerCertificate = _tlsCertificate,
+                                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                                    ClientCertificateRequired = false,
+                                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+                                }, ct);
+
+                                await HandleSmtpSession(sslStream, remoteEp, ct);
+                            }
+                            catch (AuthenticationException ex)
+                            {
+                                _logger.LogDebug("Fake SMTP STARTTLS handshake failed from {Remote}: {Error}", remoteEp, ex.Message);
+                            }
+                            return;
                         }
                         else
                         {

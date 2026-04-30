@@ -7,10 +7,10 @@ services:
     restart: always
     environment:
       # Database Connection
-      - ConnectionStrings__DefaultConnection=Host=postgres;Database=MailArchiver;Username=mailuser;Password=iskhocuyXwaqfTKp;
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=MailArchiver;Username=mailuser;Password=hhhhhh;
       # Authentication Settings
       - Authentication__Username=admin
-      - Authentication__Password=MD-9kXb!C3-ML8ba
+      - Authentication__Password=Mhhhhha
       # TimeZone Settings
       - TimeZone__DisplayTimeZoneId=Europe/London
       # Reverse proxy support
@@ -23,7 +23,7 @@ services:
       - ImapServer__Enabled=true
       - ImapServer__Port=0
       - ImapServer__ImapsPort=0
-      - ImapServer__SmtpEnabled=false
+      - ImapServer__SmtpEnabled=true
       - ImapServer__CaCertExportPath=/app/certs/mailarchiver-ca.cer
       - ImapServer__ServerCertExportPath=/app/certs/mailarchiver-server.pfx
       # SAN entries baked into the auto-generated TLS cert.
@@ -43,6 +43,8 @@ services:
       - Logging__LogLevel__MailArchiver.Services=Debug
     ports:
       - "5001:5000"
+      - "25:25"
+      - "465:465"
     networks:
       - postgres
       - internal
@@ -55,10 +57,10 @@ services:
         condition: service_healthy
 
   dovecot:
-    image: dovecot/dovecot:latest
+    image: dovecot/dovecot:2.3.21.1
     restart: always
     environment:
-      - POSTGRES_PASSWORD=iskhocuyXwaqfTKp
+      - POSTGRES_PASSWORD=hhhhh
     ports:
       - "143:143"
       - "993:993"
@@ -77,7 +79,7 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: always
-    command: tunnel --no-autoupdate run --token eyJhIjoiZDY1ZmU2OGZlM2U2Zjc5NjMyZDIyOTU0ZGZmMjc1NTEiLCJ0IjoiMjM0N2E1ZDMtNzM5My00MzFiLWIxMDYtNzlhY2Y4ZDcyOTgwIiwicyI6IlltSmtNelUyTVRNdE5tWXpaUzAwWmpGaUxUa3dZVEV0TURSallUZ3pZemt3WXpFeiJ9
+    command: tunnel --no-autoupdate run --token hhhhh
     networks:
       - internal
 
@@ -87,7 +89,7 @@ services:
     environment:
       POSTGRES_DB: MailArchiver
       POSTGRES_USER: mailuser
-      POSTGRES_PASSWORD: iskhocuyXwaqfTKp
+      POSTGRES_PASSWORD: hhhhhh
     volumes:
       - ./postgres-data:/var/lib/postgresql/data
     networks:

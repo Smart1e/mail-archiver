@@ -11,4 +11,7 @@ password_query = \
   FROM mail_archiver."MailAccounts" \
   WHERE "IsEnabled" = true \
     AND "ImapPassword" IS NOT NULL \
-    AND LOWER(COALESCE("ArchiveImapUsername", "EmailAddress")) = LOWER(regexp_replace('%Lu', '^archive-', ''))
+    AND ( \
+      LOWER("EmailAddress") = LOWER(regexp_replace('%Lu', '^archive-', '')) \
+      OR LOWER(NULLIF("ArchiveImapUsername", '')) = LOWER(regexp_replace('%Lu', '^archive-', '')) \
+    )
