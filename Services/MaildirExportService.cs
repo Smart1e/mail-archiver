@@ -116,6 +116,7 @@ namespace MailArchiver.Services
             Directory.CreateDirectory(Path.Combine(accountRoot, "cur"));
             Directory.CreateDirectory(Path.Combine(accountRoot, "new"));
             Directory.CreateDirectory(Path.Combine(accountRoot, "tmp"));
+            WriteSubscriptionsFile(accountRoot, byFolder.Keys);
 
             int materialized = 0;
             int deleted = 0;
@@ -235,9 +236,28 @@ namespace MailArchiver.Services
         }
 
         /// <summary>
-        /// Maps an ArchivedEmail.FolderName to a filesystem-safe subfolder name. INBOX is special-cased
-        /// (lives at the Maildir root); everything else is sanitized to strip characters that would
-        /// confuse Dovecot's LAYOUT=fs resolver (path separators, leading dots).
+        /// Writes Dovecot's Maildir subscriptions file. Apple Mail commonly uses subscribed mailbox
+        /// state during initial account setup; without this, the account can authenticate successfully
+        /// but only show an empty INBOX while archived folders remain hidden.
+        /// </summary>
+        private static void WriteSubscriptionsFile(string accountRoot, IEnumerable<string> folders)
+        {
+            var subscriptions = folders
+                .Where(f => !string.Equals(f, "INBOX", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var path = Path.Combine(accountRoot, "subscriptions");
+            File.WriteAllLines(path, subscriptions);
+        }
+
+        /// <summary>
+        /// Maps an ArchivedEmail.FolderName to a Dovecot LAYOUT=fs mailbox path. Upstream IMAP
+        /// providers often expose folders as "INBOX.Sent" / "INBOX.Database" with "." as the
+        /// hierarchy separator. Dovecot LAYOUT=fs expects real directory separators under the root
+        /// INBOX Maildir, so "INBOX.Database" becomes "Database" and "Projects.2024" becomes
+        /// "Projects/2024".
         /// </summary>
         private static string NormalizeFolder(string? raw)
         {
@@ -245,14 +265,20 @@ namespace MailArchiver.Services
             var trimmed = raw.Trim();
             if (string.Equals(trimmed, "INBOX", StringComparison.OrdinalIgnoreCase)) return "INBOX";
 
-            // Replace path separators with underscores so "Archive/2024" becomes "Archive_2024".
-            // Keeping it flat avoids having to pre-create the whole hierarchy.
-            var sanitized = trimmed
-                .Replace('/', '_')
-                .Replace('\\', '_')
-                .Replace('\0', '_')
-                .TrimStart('.');
-            return string.IsNullOrEmpty(sanitized) ? "INBOX" : sanitized;
+            if (trimmed.StartsWith("INBOX.", StringComparison.OrdinalIgnoreCase))
+                trimmed = trimmed["INBOX.".Length..];
+            else if (trimmed.StartsWith("INBOX/", StringComparison.OrdinalIgnoreCase))
+                trimmed = trimmed["INBOX/".Length..];
+
+            var segments = trimmed
+                .Replace('\\', '/')
+                .Replace('.', '/')
+                .Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Replace('\0', '_').Trim().Trim('.'))
+                .Where(s => !string.IsNullOrEmpty(s))
+                .ToList();
+
+            return segments.Count == 0 ? "INBOX" : Path.Combine(segments.ToArray());
         }
     }
 }
